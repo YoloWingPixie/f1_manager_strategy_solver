@@ -155,7 +155,7 @@ def is_valid_stint(compound_name, N, compound_data):
     max_laps = compound_data[compound_name]['max_competitive_laps']
     return 1 <= N <= max_laps
 
-def check_inventory(strategy, inventory):
+def check_inventory(strategy, inventory, require_medium_or_hard=True):
     """Checks if a strategy's tire usage is covered by inventory (New and Scrubbed)."""
     usage = {}
     for compound in strategy:
@@ -184,9 +184,10 @@ def check_inventory(strategy, inventory):
     if usage.get('Hard', 0) > 1:
         return False # Should be covered by the total H check, but explicit is better
     
-    # MANDATORY: Must use at least one Medium OR Hard tire (F1 regulation)
-    if usage.get('Medium', 0) == 0 and usage.get('Hard', 0) == 0:
-        return False
+    # Optional F1 regulation: Must use at least one Medium OR Hard tire
+    if require_medium_or_hard:
+        if usage.get('Medium', 0) == 0 and usage.get('Hard', 0) == 0:
+            return False
         
     return True
 
@@ -208,6 +209,7 @@ def generate_strategies(config):
     RACE_LAPS = config['race_laps']
     COMPOUND_DATA = config['compounds']
     INVENTORY = config['inventory']
+    REQUIRE_MED_HARD = config.get('require_medium_or_hard', True)
     
     # Calculate or use configured min stint
     min_stint_cfg = config.get('min_stint_laps', 'auto')
@@ -232,7 +234,7 @@ def generate_strategies(config):
         if laps_remaining == 0:
             # Check if this combination of tires is allowed by inventory
             strategy_compounds = [s[0] for s in current_stints]
-            if check_inventory(strategy_compounds, INVENTORY):
+            if check_inventory(strategy_compounds, INVENTORY, REQUIRE_MED_HARD):
                 # Final check on max stops. 3 stops = 4 stints.
                 if current_stops <= max_stops:
                     all_strategies.append(current_stints)
@@ -264,7 +266,7 @@ def generate_strategies(config):
                     
                     # Optimization: Check inventory usage *mid-recursion* to prune branches
                     strategy_compounds = [s[0] for s in new_stints]
-                    if check_inventory(strategy_compounds, INVENTORY):
+                    if check_inventory(strategy_compounds, INVENTORY, REQUIRE_MED_HARD):
                         recurse_stints(new_stints, remaining_after, max_stops)
 
 
@@ -446,6 +448,9 @@ def main():
     
     # 1. Generate and Filter All Strategies
     strategies = generate_strategies(config)
+    
+    # Filter out strategies with infinite ERT (invalid tire/mode combinations)
+    strategies = [s for s in strategies if s['ert'] != float('inf')]
     print(f"Successfully generated {len(strategies)} unique, inventory-valid strategies.")
 
     if not strategies:
