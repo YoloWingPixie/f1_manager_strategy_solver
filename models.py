@@ -1,6 +1,10 @@
 """Domain models for F1 race strategy optimization."""
+from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    pass  # For forward references if needed
 
 
 # Mode abbreviation constant - used for output formatting
@@ -71,6 +75,11 @@ class RaceConfig:
     stint_lap_step: int
     scrubbed_life_penalty: int
     require_medium_or_hard: bool
+    # Safety car settings
+    sc_pit_loss_seconds: float = 5.0
+    sc_conserve_laps: int = 3
+    sc_conserve_factor: float = 0.5
+    position_loss_value: float = 2.5  # Seconds penalty per position lost
 
     def get_pace_mode(self, mode_name: str) -> PaceMode:
         """Get pace mode by name, returns normal mode for 'normal'."""
@@ -125,4 +134,41 @@ class Strategy:
     def format_split_string(self) -> str:
         """Format stint split as 'N - N - N'"""
         return " - ".join(map(str, self.split))
+
+
+@dataclass
+class SCAnalysis:
+    """Result of safety car pit decision analysis."""
+    # Current tire state
+    current_compound: str
+    stint_laps: int  # Laps completed on current tires
+    remaining_laps: int  # Laps remaining in race
+    current_wear_laps: int  # Effective wear (accounting for SC conservation)
+    remaining_competitive_laps: int  # How many more laps current tires can do
+    tire_wear_percent: float  # Percentage of tire life used
+    can_finish_no_pit: bool  # Can finish race without pitting
+    
+    # Stay out option
+    stay_out_strategy: Strategy | None
+    stay_out_ert: float
+    
+    # Pit now option
+    pit_now_strategy: Strategy | None
+    pit_now_ert: float
+    
+    # Recommendation
+    recommendation: str  # "PIT" or "STAY_OUT"
+    time_delta: float  # ERT difference (positive = pit is faster)
+    
+    # Value breakdown
+    sc_pit_value: float  # Pure timing savings: green flag pit - SC pit (e.g., 16s)
+    
+    # Position loss when pitting
+    positions_lost: int  # Estimated positions lost by pitting under SC
+    position_penalty: float  # positions_lost × position_loss_value
+    
+    # War gaming
+    pace_deficit_per_lap: float  # How much slower per lap if staying out vs fresh tires
+    total_time_loss: float  # Total time lost over remaining laps
+    risk_assessment: str  # "LOW", "MODERATE", "HIGH"
 

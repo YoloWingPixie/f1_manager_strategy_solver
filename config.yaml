@@ -5,7 +5,13 @@ top_strategies: 10 # Number of top strategies to display
 max_pit_stops: 2 # Maximum number of pit stops to consider
 min_stint_laps: auto # Minimum laps per stint ('auto' = calculated from pit loss & degradation)
 stint_lap_step: 1 # Only consider every Nth lap for stint lengths (1 = all, 2 = every other)
-require_medium_or_hard: false # F1 regulation: must use at least one Medium or Hard tire
+require_medium_or_hard: true # F1 regulation: must use at least one Medium or Hard tire
+
+# --- SAFETY CAR ---
+sc_pit_loss_seconds: 5  # Reduced pit loss under safety car (field bunched)
+sc_conserve_laps: 3     # Laps under SC before green flag
+sc_conserve_factor: 0.5 # Tire wear rate under SC (0.5 = half normal degradation)
+position_loss_value: 5 # Seconds of ERT penalty per position lost when pitting
 
 # --- PACE MODES ---
 pace_modes:
