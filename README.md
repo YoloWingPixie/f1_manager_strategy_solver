@@ -14,7 +14,7 @@ uv sync
 
 All race parameters are configured in `config.yaml`. Key sections:
 
-- **General**: Race laps, pit loss time, strategy limits
+- **General**: Race laps, pit loss time, strategy limits, F1 compound regulations
 - **Safety Car**: SC pit loss, conservation settings
 - **Tactical Analysis**: DRS threshold, attack mode settings
 - **Pace Modes**: Push/conserve lap time deltas and degradation factors
@@ -28,7 +28,7 @@ All race parameters are configured in `config.yaml`. Key sections:
 Generate optimal race strategies ranked by Estimated Race Time (ERT).
 
 ```bash
-uv run main.py race [--config CONFIG]
+uv run python cli.py race [--config CONFIG]
 ```
 
 | Argument | Type | Default | Description |
@@ -37,8 +37,8 @@ uv run main.py race [--config CONFIG]
 
 **Example:**
 ```bash
-uv run main.py race
-uv run main.py race --config tracks/monaco.yaml
+uv run python cli.py race
+uv run python cli.py race --config tracks/monaco.yaml
 ```
 
 ---
@@ -48,32 +48,64 @@ uv run main.py race --config tracks/monaco.yaml
 Analyze whether to pit under safety car or stay out.
 
 ```bash
-uv run main.py sc [OPTIONS]
+uv run python cli.py sc [OPTIONS]
 ```
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
 | `--config` | string | No | Path to config file (default: `config.yaml`) |
-| `--stint-laps` | int | Yes* | Laps completed on current tires |
-| `--last-pit` | int | Yes* | Lap number of last pit stop (0 if none) |
-| `--current-lap` | int | Yes* | Current lap number |
-| `--remaining` | int | Yes | Laps remaining in race |
+| `--current-lap` | int | Yes | Current lap number (remaining calculated from `race_laps` in config) |
+| `--stint-laps` | int | Yes | Laps completed on current tires |
 | `--compound` | string | Yes | Current tire compound: `Soft`, `Medium`, `Hard` |
 | `--pos-loss` | int | No | Estimated positions lost if you pit (default: 0) |
-
-*Either `--stint-laps` OR both `--last-pit` and `--current-lap` required.
 
 **Examples:**
 ```bash
 # Interactive mode
-uv run main.py sc
+uv run python cli.py sc
 
-# Direct input
-uv run main.py sc --stint-laps 10 --remaining 30 --compound Medium
+# Direct input (remaining laps calculated from config.race_laps - current_lap)
+uv run python cli.py sc --current-lap 20 --stint-laps 10 --compound Medium
 
-# Using last-pit + current-lap
-uv run main.py sc --last-pit 5 --current-lap 15 --remaining 30 --compound Soft --pos-loss 2
+# With position loss estimate
+uv run python cli.py sc --current-lap 15 --stint-laps 15 --compound Soft --pos-loss 2
 ```
+
+---
+
+### `live` - Mid-Race Strategy Recalculation
+
+Calculate optimal strategy from your current mid-race position.
+
+```bash
+uv run python cli.py live [OPTIONS]
+```
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `--config` | string | No | Path to config file (default: `config.yaml`) |
+| `--current-lap` | int | Yes | Current lap number (remaining calculated from `race_laps` in config) |
+| `--compound` | string | Yes | Current tire compound: `Soft`, `Medium`, `Hard` |
+| `--tire-laps` | int | Yes | Laps on current tires |
+
+**Examples:**
+```bash
+# Interactive mode
+uv run python cli.py live
+
+# Direct input - mid-race recalculation
+uv run python cli.py live --current-lap 25 --compound Medium --tire-laps 15
+
+# After a red flag restart
+uv run python cli.py live --current-lap 30 --compound Soft --tire-laps 10
+```
+
+**Output includes:**
+- Current race position context (Lap X of Y)
+- Tire status (wear %, competitive laps remaining, cliff lap)
+- Top strategies ranked by ERT
+- Pit lap recommendations (actual lap numbers, not "in X laps")
+- Next tire compound for each strategy
 
 ---
 
@@ -82,7 +114,7 @@ uv run main.py sc --last-pit 5 --current-lap 15 --remaining 30 --compound Soft -
 Analyze which compound is fastest at each lap of a stint, identifying crossover points.
 
 ```bash
-uv run main.py tires [OPTIONS]
+uv run python cli.py tires [OPTIONS]
 ```
 
 | Argument | Type | Default | Description |
@@ -95,13 +127,13 @@ uv run main.py tires [OPTIONS]
 **Examples:**
 ```bash
 # Basic analysis
-uv run main.py tires
+uv run python cli.py tires
 
 # With ASCII chart
-uv run main.py tires --chart
+uv run python cli.py tires --chart
 
 # Analyze push mode domains
-uv run main.py tires --mode push --chart
+uv run python cli.py tires --mode push --chart
 ```
 
 ---
@@ -111,7 +143,7 @@ uv run main.py tires --mode push --chart
 Determine optimal pit timing relative to a rival.
 
 ```bash
-uv run main.py undercut [OPTIONS]
+uv run python cli.py undercut [OPTIONS]
 ```
 
 | Argument | Type | Required | Description |
@@ -129,15 +161,15 @@ uv run main.py undercut [OPTIONS]
 **Examples:**
 ```bash
 # Interactive mode
-uv run main.py undercut
+uv run python cli.py undercut
 
 # You're 2.3s behind, rival pits lap 22
-uv run main.py undercut --gap -2.3 --current-lap 18 --rival-pit 22 \
+uv run python cli.py undercut --gap -2.3 --current-lap 18 --rival-pit 22 \
     --your-tire-laps 18 --rival-tire-laps 22 \
     --your-compound Medium --rival-compound Medium
 
 # Specify pit-to compound
-uv run main.py undercut --gap -1.5 --current-lap 20 --rival-pit 25 \
+uv run python cli.py undercut --gap -1.5 --current-lap 20 --rival-pit 25 \
     --your-tire-laps 20 --rival-tire-laps 25 \
     --your-compound Hard --rival-compound Hard --pit-to Soft
 ```
@@ -149,7 +181,7 @@ uv run main.py undercut --gap -1.5 --current-lap 20 --rival-pit 25 \
 Decide whether to push to deny DRS or conserve tires when under pressure.
 
 ```bash
-uv run main.py drs [OPTIONS]
+uv run python cli.py drs [OPTIONS]
 ```
 
 | Argument | Type | Required | Description |
@@ -165,10 +197,10 @@ uv run main.py drs [OPTIONS]
 **Examples:**
 ```bash
 # Interactive mode
-uv run main.py drs
+uv run python cli.py drs
 
 # Car behind at 0.8s, 12 laps to go
-uv run main.py drs --gap 0.8 --stint-laps-remaining 12 \
+uv run python cli.py drs --gap 0.8 --stint-laps-remaining 12 \
     --your-tire-laps 18 --attacker-tire-laps 8 \
     --your-compound Medium --attacker-compound Soft
 ```
@@ -186,7 +218,7 @@ uv run main.py drs --gap 0.8 --stint-laps-remaining 12 \
 Analyze whether to actively chase a car ahead or let them come back naturally.
 
 ```bash
-uv run main.py attack [OPTIONS]
+uv run python cli.py attack [OPTIONS]
 ```
 
 | Argument | Type | Required | Description |
@@ -202,10 +234,10 @@ uv run main.py attack [OPTIONS]
 **Examples:**
 ```bash
 # Interactive mode
-uv run main.py attack
+uv run python cli.py attack
 
 # 2.5s behind, 15 laps remaining
-uv run main.py attack --gap 2.5 --stint-laps-remaining 15 \
+uv run python cli.py attack --gap 2.5 --stint-laps-remaining 15 \
     --your-tire-laps 10 --target-tire-laps 20 \
     --your-compound Soft --target-compound Medium
 ```
@@ -221,20 +253,42 @@ uv run main.py attack --gap 2.5 --stint-laps-remaining 15 \
 
 ## Interactive Mode
 
-All tactical tools (`sc`, `undercut`, `drs`, `attack`) support interactive mode. Simply run without arguments:
+All tactical tools (`sc`, `live`, `undercut`, `drs`, `attack`) support interactive mode. Simply run without arguments:
 
 ```bash
-uv run main.py sc
-uv run main.py undercut
-uv run main.py drs
-uv run main.py attack
+uv run python cli.py sc
+uv run python cli.py live
+uv run python cli.py undercut
+uv run python cli.py drs
+uv run python cli.py attack
 ```
 
 You'll be prompted for each required input.
 
 ---
 
+## Project Structure
+
+```
+f1_manager_strategy/
+  models.py    - Data models (dataclasses)
+  core.py      - ERT calculation, degradation model, tire utilities
+  analysis.py  - Strategy generation and all analyzer functions
+  output.py    - Output formatting and print functions
+  config.py    - Configuration loading
+  cli.py       - CLI entry point (argparse, command routing)
+```
+
+---
+
 ## Config Reference
+
+### F1 Regulations
+
+```yaml
+require_medium_or_hard: true  # Must use at least one Medium or Hard tire
+require_two_compounds: true   # Must use at least 2 different compounds
+```
 
 ### Tactical Analysis Settings
 
@@ -269,4 +323,3 @@ The tool uses a progressive degradation model:
 - **Beyond max life**: 2x+ degradation rate (tires are done)
 
 This models real tire behavior where degradation is low early, then falls off a cliff.
-

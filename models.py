@@ -75,6 +75,7 @@ class RaceConfig:
     stint_lap_step: int
     scrubbed_life_penalty: int
     require_medium_or_hard: bool
+    require_two_compounds: bool  # F1 regulation: must use at least 2 different compounds
     # Safety car settings
     sc_pit_loss_seconds: float = 5.0
     sc_conserve_laps: int = 3
