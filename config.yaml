@@ -1,50 +1,60 @@
 # --- GENERAL RACE CONFIGURATION ---
-race_laps: 47
-pit_loss_seconds: 21 # Time lost during a green flag pit stop
+race_laps: 53
+pit_loss_seconds: 23 # Time lost during a green flag pit stop
 top_strategies: 10 # Number of top strategies to display
 max_pit_stops: 2 # Maximum number of pit stops to consider
 min_stint_laps: auto # Minimum laps per stint ('auto' = calculated from pit loss & degradation)
 stint_lap_step: 1 # Only consider every Nth lap for stint lengths (1 = all, 2 = every other)
 require_medium_or_hard: true # F1 regulation: must use at least one Medium or Hard tire
 
-# --- SAFETY CAR ---
-sc_pit_loss_seconds: 5  # Reduced pit loss under safety car (field bunched)
-sc_conserve_laps: 3     # Laps under SC before green flag
-sc_conserve_factor: 0.5 # Tire wear rate under SC (0.5 = half normal degradation)
-position_loss_value: 5 # Seconds of ERT penalty per position lost when pitting
-
-# --- PACE MODES ---
-pace_modes:
-  push:
-    delta_per_lap: -0.150 # Seconds gained per lap
-    degradation_factor: 1.285 # 45% faster tire wear (max laps = base / 1.45)
-  conserve:
-    delta_per_lap: 0.50 # Seconds lost per lap
-    degradation_factor: 0.84 # 16% slower tire wear (max laps = base / 0.84)
+# --- TYRE PERFORMANCE DATA ---
+# Lap times can be entered as "M:SS.mmm" or just seconds (e.g., 91.209)
+compounds:
+  Soft:
+    avg_lap_time: "1:28.951"
+    degradation_s_per_lap: 0.09
+    max_competitive_laps: 20 # Max recommended stint length
+  Medium:
+    avg_lap_time: "1:29.439"
+    degradation_s_per_lap: 0.06
+    max_competitive_laps: 28 # Max recommended stint length
+  Hard:
+    avg_lap_time: "1:29.762"
+    degradation_s_per_lap: 0.05
+    max_competitive_laps: 32 # Max recommended stint length
 
 # --- TYRE INVENTORY ---
 scrubbed_life_penalty: 4 # Scrubbed tires have this many fewer competitive laps
 inventory:
   # The app will track total usage against these counts
-  soft_new: 1
-  soft_scrubbed: 1
+  soft_new: 2
+  soft_scrubbed: 0
   medium_new: 2
   medium_scrubbed: 0
   hard_new: 1
   hard_scrubbed: 0
 
-# --- TYRE PERFORMANCE DATA (Miami Track) ---
-# Lap times can be entered as "M:SS.mmm" or just seconds (e.g., 91.209)
-compounds:
-  Soft:
-    avg_lap_time: "1:28.834"
-    degradation_s_per_lap: 0.08
-    max_competitive_laps: 24 # Max recommended stint length
-  Medium:
-    avg_lap_time: "1:32.756"
-    degradation_s_per_lap: 0.05
-    max_competitive_laps: 33 # Max recommended stint length
-  Hard:
-    avg_lap_time: "1:33.204"
-    degradation_s_per_lap: 0.04
-    max_competitive_laps: 46 # Max recommended stint length
+# --- SAFETY CAR ---
+sc_pit_loss_seconds: 19  # Reduced pit loss under safety car (field bunched)
+sc_conserve_laps: 3     # Laps under SC before green flag
+sc_conserve_factor: 0.5 # Tire wear rate under SC (0.5 = half normal degradation)
+position_loss_value: 5 # Seconds of ERT penalty per position lost when pitting
+
+# --- TACTICAL ANALYSIS ---
+drs_threshold_seconds: 1.0  # Gap required to deny DRS
+dirty_air_loss_per_lap: 0.5 # Pace loss when following closely (<1.5s gap)
+inlap_push_gain: 0.3        # Seconds faster on in-lap (pushing before pit)
+outlap_penalty: 1.5         # Seconds slower on out-lap (cold tires)
+
+# --- PACE MODES ---
+pace_modes:
+  push:
+    delta_per_lap: -0.150 # Seconds gained per lap
+    degradation_factor: 1.285 # ~29% faster tire wear
+  conserve:
+    delta_per_lap: 0.50 # Seconds lost per lap
+    degradation_factor: 0.84 # ~16% slower tire wear
+  attack:
+    delta_per_lap: -0.35 # Seconds gained per lap (more aggressive than push)
+    degradation_factor: 2.0  # 2x tire wear rate
+

@@ -6,8 +6,17 @@ from math import floor
 
 from tabulate import tabulate
 
-from models import RaceConfig, Compound, Inventory, PaceMode, Strategy, SCAnalysis
-from strategy import generate_strategies, find_clean_air_strategy, calculate_min_stint, analyze_safety_car
+from models import (
+    RaceConfig, Compound, Inventory, PaceMode, Strategy, SCAnalysis,
+    TireDomainAnalysis, TireDomain, CrossoverPoint,
+    UndercutAnalysis, DRSAnalysis, AttackAnalysis, ModeScenario,
+    LiveAnalysis, LiveStrategy
+)
+from strategy import (
+    generate_strategies, find_clean_air_strategy, calculate_min_stint, analyze_safety_car,
+    analyze_tire_domains, analyze_undercut, analyze_drs_defense, analyze_attack,
+    analyze_live_strategy
+)
 
 
 def parse_laptime(value) -> float:
@@ -19,19 +28,19 @@ def parse_laptime(value) -> float:
     """
     if isinstance(value, (int, float)):
         return float(value)
-
+    
     if isinstance(value, str):
         match = re.match(r'^(\d+):(\d+(?:\.\d+)?)$', value.strip())
         if match:
             minutes = int(match.group(1))
             seconds = float(match.group(2))
             return minutes * 60 + seconds
-
+        
         try:
             return float(value)
         except ValueError:
             raise ValueError(f"Cannot parse lap time: {value}")
-
+    
     raise ValueError(f"Invalid lap time type: {type(value)}")
 
 
@@ -86,7 +95,11 @@ def load_config(path: str) -> RaceConfig:
         sc_pit_loss_seconds=raw.get('sc_pit_loss_seconds', 5.0),
         sc_conserve_laps=raw.get('sc_conserve_laps', 3),
         sc_conserve_factor=raw.get('sc_conserve_factor', 0.5),
-        position_loss_value=raw.get('position_loss_value', 2.5)
+        position_loss_value=raw.get('position_loss_value', 2.5),
+        drs_threshold_seconds=raw.get('drs_threshold_seconds', 1.0),
+        dirty_air_loss_per_lap=raw.get('dirty_air_loss_per_lap', 0.5),
+        inlap_push_gain=raw.get('inlap_push_gain', 0.3),
+        outlap_penalty=raw.get('outlap_penalty', 1.5)
     )
 
 
@@ -175,7 +188,7 @@ def print_clean_air_strategy(
         nearby_pits = [lap for lap in top_pit_laps if abs(lap - second_pit) <= 3]
         print(f"\n**Second Pit:** Lap {second_pit}", end="")
         if not nearby_pits:
-            print(" (CLEAR WINDOW - no top strategy pits within ±3 laps)")
+            print(" (CLEAR WINDOW - no top strategy pits within +/-3 laps)")
         else:
             print(f" (nearby pits: {sorted(nearby_pits)})")
 
@@ -242,7 +255,7 @@ def print_sc_analysis(analysis: SCAnalysis, config: RaceConfig) -> None:
     delta = abs(analysis.time_delta)
     
     if analysis.recommendation == "PIT":
-        print(f">>> RECOMMENDATION: PIT NOW")
+        print(f">>> RECOMMENDATION: PIT NOW (saves {delta:.1f}s)")
         
         # Explain where the time difference comes from
         if analysis.stay_out_strategy and analysis.pit_now_strategy:
@@ -256,38 +269,30 @@ def print_sc_analysis(analysis: SCAnalysis, config: RaceConfig) -> None:
             compounds_differ = stay_compounds != pit_compounds
             
             if analysis.can_finish_no_pit and stay_pits == 0:
-                print(f"    Time difference: {delta:.1f}s")
                 print(f"    Note: STAY OUT avoids pitting entirely")
                 print(f"    PIT NOW costs {config.sc_pit_loss_seconds:.0f}s but provides fresh tires")
             elif compounds_differ:
                 # Different compounds - breakdown the sources
-                print(f"\n    Time Breakdown:")
                 print(f"    - SC pit timing value: ~{analysis.sc_pit_value:.0f}s (vs green flag pit)")
                 if analysis.positions_lost > 0:
                     print(f"    - Position penalty: -{analysis.position_penalty:.1f}s ({analysis.positions_lost} positions lost)")
                 compound_benefit = delta - analysis.sc_pit_value + analysis.position_penalty
                 if compound_benefit > 0:
                     print(f"    - Compound switch benefit: ~{compound_benefit:.0f}s")
-                    print(f"      (PIT NOW uses {pit_comp[0]}, STAY OUT uses {stay_comp[0]})")
-                print(f"    - Net advantage: {delta:.1f}s")
-                print(f"\n    NOTE: Most savings come from switching to faster compound,")
-                print(f"    not from pit timing. Check if compound lap times are realistic.")
             else:
                 # Same compounds - pure pit timing difference
-                print(f"    Time saved: {delta:.1f}s")
                 if analysis.positions_lost > 0:
                     print(f"    Position penalty factored in: -{analysis.position_penalty:.1f}s")
-                if delta <= analysis.sc_pit_value + 5:
-                    print(f"    Reason: SC pit timing advantage ({analysis.sc_pit_value:.0f}s)")
-                else:
-                    print(f"    Reason: Fresh tires + pit timing")
+                print(f"    Reason: SC pit timing advantage + fresh tires")
     else:
-        print(f">>> RECOMMENDATION: STAY OUT")
-        print(f"    Time saved vs pitting: {delta:.1f}s")
+        # STAY_OUT recommendation
+        print(f">>> RECOMMENDATION: STAY OUT (saves {delta:.1f}s)")
         if analysis.positions_lost > 0:
             print(f"    Position penalty factored in: {analysis.position_penalty:.1f}s ({analysis.positions_lost} positions)")
         if analysis.can_finish_no_pit:
-            print(f"    Reason: Can finish without pitting, avoiding {config.sc_pit_loss_seconds:.0f}s pit loss")
+            print(f"    Reason: Can finish without pitting")
+        else:
+            print(f"    Reason: Better to pit on green flag later")
     print("=" * 40)
     
     # War Gaming
@@ -309,14 +314,14 @@ def print_sc_analysis(analysis: SCAnalysis, config: RaceConfig) -> None:
 def run_race_command(config: RaceConfig) -> None:
     """Run the race strategy generation command."""
     print("--- Race Strategy Optimizer Initializing ---")
-
+    
     # Display config info
     if config.min_stint_laps == 'auto':
         min_stint = calculate_min_stint(config)
         print(f"Race Laps: {config.race_laps}, Pit Loss: {config.pit_loss_seconds}s, Min Stint: {min_stint} (auto)")
     else:
         print(f"Race Laps: {config.race_laps}, Pit Loss: {config.pit_loss_seconds}s, Min Stint: {config.min_stint_laps}")
-
+    
     # Generate strategies
     strategies = generate_strategies(config)
 
@@ -331,15 +336,15 @@ def run_race_command(config: RaceConfig) -> None:
     # Sort by ERT
     ranked_strategies = sorted(strategies, key=lambda x: x.ert)
 
-    # Deduplicate: keep only best lap split per (compound_sequence, pit_stops)
-    seen_keys: set[tuple] = set()
+    # Deduplicate by Strategy (Mode) string - keep best stint split for each
+    seen_keys: set[str] = set()
     unique_strategies: list[Strategy] = []
     for strat in ranked_strategies:
-        key = (tuple(strat.compound_sequence), strat.pit_stops)
+        key = strat.format_strategy_string()  # e.g. "Medium(P) -> Hard(N)"
         if key not in seen_keys:
             seen_keys.add(key)
             unique_strategies.append(strat)
-
+    
     # Find clean air strategy
     clean_air_strat = find_clean_air_strategy(
         config,
@@ -347,7 +352,7 @@ def run_race_command(config: RaceConfig) -> None:
         ranked_strategies
     )
 
-    # Output
+    # Output top N unique strategies by ERT
     print_top_strategies(unique_strategies, config)
 
     if clean_air_strat:
@@ -366,20 +371,21 @@ def run_sc_interactive(config: RaceConfig) -> None:
     print("\n" + "=" * 50)
     print("SAFETY CAR DECISION - Interactive Mode")
     print("=" * 50)
+    print(f"Race: {config.race_laps} laps")
     
     compounds = list(config.compounds.keys())
     
     try:
         # Current lap
         current_lap = int(input("\nCurrent lap number: "))
+        remaining = config.race_laps - current_lap
+        if remaining <= 0:
+            print(f"Error: current lap must be < {config.race_laps}")
+            return
+        print(f"  -> {remaining} laps remaining")
         
-        # Last pit lap
-        last_pit = int(input("Last pit stop lap (0 if none): "))
-        stint_laps = current_lap - last_pit
-        print(f"  → Stint laps: {stint_laps}")
-        
-        # Remaining laps
-        remaining = int(input("Laps remaining in race: "))
+        # Stint laps
+        stint_laps = int(input("Laps on current tires: "))
         
         # Compound selection
         print(f"\nCompounds: {', '.join(f'{i+1}={c}' for i, c in enumerate(compounds))}")
@@ -425,6 +431,515 @@ def run_sc_command(config: RaceConfig, stint_laps: int, remaining: int, compound
     print_sc_analysis(analysis, config)
 
 
+# --- Tire Domain Analysis ---
+
+def format_laptime(seconds: float) -> str:
+    """Format lap time as M:SS.ms"""
+    minutes = floor(seconds / 60)
+    secs = seconds % 60
+    return f"{minutes}:{secs:05.2f}"
+
+
+def print_tire_domains(analysis: TireDomainAnalysis, config: RaceConfig, show_chart: bool = False) -> None:
+    """Print tire domain analysis results."""
+    print("\n" + "=" * 60)
+    print("TIRE DOMAIN ANALYSIS (Fresh Stint)")
+    print("=" * 60)
+    print("Based on progressive degradation model\n")
+    
+    # Domain table
+    print("COMPOUND DOMAINS:")
+    print("-" * 60)
+    headers = ["Lap Range", "Fastest", "Lap Time Range"]
+    rows = []
+    for domain in analysis.domains:
+        lap_range = f"Laps {domain.start_lap:3d}-{domain.end_lap:3d}"
+        time_range = f"{format_laptime(domain.start_laptime_s)} -> {format_laptime(domain.end_laptime_s)}"
+        rows.append([lap_range, domain.compound, time_range])
+    print(tabulate(rows, headers=headers, tablefmt="plain"))
+    
+    # Crossover points
+    if analysis.crossover_points:
+        print("\nCROSSOVER POINTS:")
+        print("-" * 60)
+        for cp in analysis.crossover_points:
+            print(f"Lap {cp.lap}: {cp.from_compound} ({format_laptime(cp.from_laptime_s)}) "
+                  f"slower than {cp.to_compound} ({format_laptime(cp.to_laptime_s)})")
+            print(f"        -> Switch domain: {cp.from_compound} -> {cp.to_compound}")
+    
+    # Compound details
+    print("\nCOMPOUND DETAILS:")
+    print("-" * 60)
+    for name, details in analysis.compound_details.items():
+        print(f"{name}:")
+        print(f"  Base pace: {format_laptime(details['base_pace_s'])} | "
+              f"Deg: {details['degradation_s_per_lap']:.2f}s/lap | "
+              f"Cliff: {details['max_competitive_laps']} laps")
+    
+    # ASCII chart
+    if show_chart:
+        print("\nDOMAIN CHART:")
+        print("-" * 60)
+        print_domain_chart(analysis)
+
+
+def print_domain_chart(analysis: TireDomainAnalysis) -> None:
+    """Print ASCII domain chart."""
+    max_lap = analysis.max_analysis_lap
+    chart_width = 50
+    scale = chart_width / max_lap
+    
+    # Header with lap markers
+    header = "Lap: "
+    for lap in range(0, max_lap + 1, 10):
+        pos = int(lap * scale)
+        header = header[:5 + pos] + str(lap).ljust(10)[:10 - pos % 10 if pos % 10 else 10]
+    print(header[:5 + chart_width])
+    
+    # Domain bars
+    for domain in analysis.domains:
+        start_pos = int(domain.start_lap * scale)
+        end_pos = int(domain.end_lap * scale)
+        width = max(1, end_pos - start_pos)
+        
+        line = "      " + " " * start_pos + "[" + "=" * (width - 2) + "]"
+        compound_label = f" {domain.compound}"
+        print(line + compound_label)
+
+
+def run_tires_command(config: RaceConfig, mode: str, starting_wear: int, show_chart: bool) -> None:
+    """Run tire domain analysis."""
+    print("\n--- Tire Domain Analysis ---")
+    analysis = analyze_tire_domains(config, mode, starting_wear)
+    print_tire_domains(analysis, config, show_chart)
+
+
+# --- Undercut Analysis ---
+
+def print_undercut_analysis(analysis: UndercutAnalysis, config: RaceConfig) -> None:
+    """Print undercut/overcut analysis results."""
+    position = "AHEAD" if analysis.gap_to_rival > 0 else "BEHIND"
+    
+    print("\n" + "=" * 60)
+    print(f"UNDERCUT ANALYSIS: You are {abs(analysis.gap_to_rival):.1f}s {position} rival")
+    print("=" * 60)
+    print(f"Rival expected pit: Lap {analysis.rival_pit_lap} (in {analysis.laps_until_rival_pits} laps)")
+    
+    # Tire state
+    print(f"\nYOUR TIRES: {analysis.your_compound}, {analysis.your_tire_laps} laps (~{analysis.your_wear_percent:.0f}% worn)")
+    print(f"RIVAL TIRES: {analysis.rival_compound}, {analysis.rival_tire_laps} laps (~{analysis.rival_wear_percent:.0f}% worn)")
+    print(f"PIT TO: {analysis.pit_to_compound}")
+    
+    # Undercut option
+    print("\n" + "-" * 40)
+    print(f"OPTION: UNDERCUT (pit now, Lap {analysis.current_lap})")
+    print("-" * 40)
+    print(f"  Fresh tire pace advantage: ~{analysis.fresh_tire_advantage:.2f}s/lap")
+    print(f"  Laps in clean air before rival pits: {analysis.undercut_window_laps}")
+    print(f"  Time gained in window: {analysis.time_gained_undercut:.1f}s")
+    print(f"  Out-lap penalty: -{config.outlap_penalty:.1f}s")
+    gap_str = f"+{analysis.projected_gap_after_undercut:.1f}s AHEAD" if analysis.projected_gap_after_undercut > 0 else f"{analysis.projected_gap_after_undercut:.1f}s BEHIND"
+    print(f"  Projected gap after rival pits: {gap_str}")
+    print(f"  >>> {'UNDERCUT VIABLE' if analysis.undercut_viable else 'UNDERCUT NOT VIABLE'}")
+    
+    # Overcut/stay out option
+    print("\n" + "-" * 40)
+    print("OPTION: STAY OUT (pit after rival)")
+    print("-" * 40)
+    print(f"  Rival exits on fresh tires")
+    print(f"  Time lost over {analysis.laps_until_rival_pits} laps: {analysis.time_lost_staying_out:.1f}s")
+    gap_str = f"+{analysis.projected_gap_after_overcut:.1f}s AHEAD" if analysis.projected_gap_after_overcut > 0 else f"{analysis.projected_gap_after_overcut:.1f}s BEHIND"
+    print(f"  Projected gap: {gap_str}")
+    print(f"  >>> {'OVERCUT VIABLE' if analysis.overcut_viable else 'OVERCUT NOT VIABLE'}")
+    
+    # Recommendation
+    print("\n" + "=" * 40)
+    print(f">>> RECOMMENDATION: {analysis.recommendation}")
+    print(f"    {analysis.recommendation_reason}")
+    print("=" * 40)
+
+
+def run_undercut_interactive(config: RaceConfig) -> None:
+    """Run undercut analysis in interactive mode."""
+    print("\n" + "=" * 50)
+    print("UNDERCUT ANALYSIS - Interactive Mode")
+    print("=" * 50)
+    
+    compounds = list(config.compounds.keys())
+    
+    try:
+        gap = float(input("\nGap to rival (positive=ahead, negative=behind): "))
+        current_lap = int(input("Current race lap: "))
+        rival_pit = int(input("Expected lap rival will pit: "))
+        your_tire_laps = int(input("Laps on your current tires: "))
+        rival_tire_laps = int(input("Laps on rival's tires: "))
+        
+        print(f"\nCompounds: {', '.join(f'{i+1}={c}' for i, c in enumerate(compounds))}")
+        your_idx = int(input("Your compound (enter number): ")) - 1
+        rival_idx = int(input("Rival compound (enter number): ")) - 1
+        
+        pit_to_input = input("Pit to compound (enter number, or press Enter for fastest): ")
+        pit_to = compounds[int(pit_to_input) - 1] if pit_to_input.strip() else None
+        
+    except (ValueError, IndexError):
+        print("Invalid input")
+        return
+    except KeyboardInterrupt:
+        print("\nCancelled")
+        return
+
+    run_undercut_command(config, gap, current_lap, rival_pit, your_tire_laps,
+                        rival_tire_laps, compounds[your_idx], compounds[rival_idx], pit_to)
+
+
+def run_undercut_command(config: RaceConfig, gap: float, current_lap: int, rival_pit: int,
+                        your_tire_laps: int, rival_tire_laps: int,
+                        your_compound: str, rival_compound: str, pit_to: str | None) -> None:
+    """Run undercut analysis command."""
+    analysis = analyze_undercut(
+        gap_to_rival=gap,
+        current_lap=current_lap,
+        rival_pit_lap=rival_pit,
+        your_compound=your_compound,
+        your_tire_laps=your_tire_laps,
+        rival_compound=rival_compound,
+        rival_tire_laps=rival_tire_laps,
+        pit_to_compound=pit_to,
+        config=config
+    )
+    print_undercut_analysis(analysis, config)
+
+
+# --- DRS Defense Analysis ---
+
+def print_drs_analysis(analysis: DRSAnalysis, config: RaceConfig) -> None:
+    """Print DRS defense analysis results."""
+    drs_status = "IN DRS RANGE" if analysis.in_drs_range else "OUTSIDE DRS"
+    
+    print("\n" + "=" * 60)
+    print("DRS DEFENSE ANALYSIS")
+    print("=" * 60)
+    print(f"Current gap: {analysis.gap_to_attacker:.1f}s ({drs_status})")
+    print(f"Stint remaining: {analysis.stint_laps_remaining} laps")
+    
+    # Tire states
+    print(f"\nYOUR TIRES: {analysis.your_compound}, {analysis.your_tire_laps} laps "
+          f"(~{analysis.your_wear_percent:.0f}% worn)")
+    print(f"  - Max competitive laps: {analysis.your_max_competitive_laps}")
+    print(f"  - Base pace deficit vs attacker: ~{analysis.base_pace_delta:.2f}s/lap")
+    
+    print(f"\nATTACKER: {analysis.attacker_compound}, {analysis.attacker_tire_laps} laps "
+          f"(~{analysis.attacker_wear_percent:.0f}% worn)")
+    
+    # Scenarios
+    for scenario in analysis.scenarios:
+        print("\n" + "-" * 40)
+        print(f"SCENARIO: {scenario.name}")
+        print("-" * 40)
+        print(f"  Mode: {scenario.description}")
+        
+        gap_str = f"+{scenario.final_gap:.1f}s" if scenario.final_gap > 0 else f"{scenario.final_gap:.1f}s"
+        print(f"  Final gap: {gap_str}")
+        print(f"  Tire wear at end: {scenario.tire_wear_at_end:.0f} effective laps ({scenario.tire_percent_at_end:.0f}%)")
+        
+        if scenario.exceeds_tire_life:
+            print(f"  WARNING: Exceeds tire life (cliff at lap ~{scenario.cliff_lap})")
+        
+        if scenario.sustainable:
+            print(f"  >>> SUSTAINABLE - position defended")
+        else:
+            if scenario.final_gap <= 0:
+                print(f"  >>> OVERTAKEN")
+            else:
+                print(f"  >>> NOT SUSTAINABLE - tires will fail")
+    
+    # Recommendation
+    print("\n" + "=" * 40)
+    rec = analysis.recommended_scenario
+    if "BURST" in analysis.recommendation:
+        push_laps = analysis.optimal_push_laps
+        print(f">>> RECOMMENDATION: BURST PUSH ({push_laps} laps) then CONSERVE")
+    else:
+        print(f">>> RECOMMENDATION: {analysis.recommendation}")
+    print(f"    Final gap: {rec.final_gap:.1f}s | Tire: {rec.tire_percent_at_end:.0f}% worn")
+    print("=" * 40)
+
+
+def run_drs_interactive(config: RaceConfig) -> None:
+    """Run DRS defense analysis in interactive mode."""
+    print("\n" + "=" * 50)
+    print("DRS DEFENSE ANALYSIS - Interactive Mode")
+    print("=" * 50)
+    
+    compounds = list(config.compounds.keys())
+    
+    try:
+        gap = float(input("\nGap to car behind (seconds): "))
+        stint_laps = int(input("Laps remaining in stint: "))
+        your_tire_laps = int(input("Laps on your tires: "))
+        attacker_tire_laps = int(input("Laps on attacker's tires: "))
+        
+        print(f"\nCompounds: {', '.join(f'{i+1}={c}' for i, c in enumerate(compounds))}")
+        your_idx = int(input("Your compound (enter number): ")) - 1
+        attacker_idx = int(input("Attacker compound (enter number): ")) - 1
+        
+    except (ValueError, IndexError):
+        print("Invalid input")
+        return
+    except KeyboardInterrupt:
+        print("\nCancelled")
+        return
+    
+    run_drs_command(config, gap, stint_laps, your_tire_laps, attacker_tire_laps,
+                   compounds[your_idx], compounds[attacker_idx])
+
+
+def run_drs_command(config: RaceConfig, gap: float, stint_laps_remaining: int,
+                   your_tire_laps: int, attacker_tire_laps: int,
+                   your_compound: str, attacker_compound: str) -> None:
+    """Run DRS defense analysis command."""
+    analysis = analyze_drs_defense(
+        gap_to_attacker=gap,
+        stint_laps_remaining=stint_laps_remaining,
+        your_compound=your_compound,
+        your_tire_laps=your_tire_laps,
+        attacker_compound=attacker_compound,
+        attacker_tire_laps=attacker_tire_laps,
+        config=config
+    )
+    print_drs_analysis(analysis, config)
+
+
+# --- Attack Analysis ---
+
+def print_attack_analysis(analysis: AttackAnalysis, config: RaceConfig) -> None:
+    """Print attack/catch analysis results."""
+    print("\n" + "=" * 60)
+    print("ATTACK ANALYSIS: Catching car ahead")
+    print("=" * 60)
+    print(f"Current gap: {analysis.gap_to_target:.1f}s | Target: DRS range (<{analysis.drs_threshold}s)")
+    print(f"Stint remaining: {analysis.stint_laps_remaining} laps")
+    
+    # Tire states
+    print(f"\nYOUR TIRES: {analysis.your_compound}, {analysis.your_tire_laps} laps "
+          f"(~{analysis.your_wear_percent:.0f}% worn)")
+    print(f"TARGET TIRES: {analysis.target_compound}, {analysis.target_tire_laps} laps "
+          f"(~{analysis.target_wear_percent:.0f}% worn)")
+    
+    # Natural convergence
+    print("\n" + "-" * 40)
+    print("NATURAL CONVERGENCE:")
+    print("-" * 40)
+    closing_str = f"~{analysis.natural_closing_rate:.2f}s/lap" if analysis.natural_closing_rate > 0 else "NOT CLOSING"
+    print(f"  Natural closing rate: {closing_str}")
+    if analysis.can_reach_drs_naturally:
+        print(f"  Laps to DRS range: {analysis.laps_to_drs_natural} laps")
+        print(f"  >>> THEY COME BACK TO YOU - no attack needed")
+    else:
+        if analysis.laps_to_drs_natural:
+            print(f"  Laps to DRS: {analysis.laps_to_drs_natural} (exceeds stint)")
+        print(f"  >>> THEY WON'T COME BACK in this stint")
+    
+    # Mode scenarios
+    for scenario in analysis.scenarios:
+        if scenario.name == "STAY_ON_PLAN":
+            continue  # Already covered above
+        
+        print("\n" + "-" * 40)
+        print(f"{scenario.name} MODE:")
+        print("-" * 40)
+        
+        if scenario.final_gap <= analysis.drs_threshold:
+            print(f"  Reaches DRS: YES")
+        else:
+            print(f"  Reaches DRS: NO (final gap {scenario.final_gap:.1f}s)")
+        
+        print(f"  Tire wear at end: {scenario.tire_wear_at_end:.0f} effective laps ({scenario.tire_percent_at_end:.0f}%)")
+        
+        if scenario.exceeds_tire_life:
+            print(f"  WARNING: Exceeds tire competitive life!")
+        
+        if scenario.sustainable:
+            print(f"  >>> REACHES DRS with sustainable tires")
+        elif scenario.final_gap <= analysis.drs_threshold:
+            print(f"  >>> REACHES DRS but burns tires")
+        else:
+            print(f"  >>> DOESN'T REACH DRS")
+    
+    # Recommendation
+    print("\n" + "=" * 40)
+    print(f">>> RECOMMENDATION: {analysis.recommendation}")
+    rec = analysis.recommended_scenario
+    if analysis.recommendation == "STAY_ON_PLAN":
+        if analysis.can_reach_drs_naturally:
+            print(f"    Natural convergence gets you to DRS in {analysis.laps_to_drs_natural} laps")
+        else:
+            print(f"    No mode reaches DRS sustainably")
+    else:
+        print(f"    Final gap: {rec.final_gap:.1f}s | Tire: {rec.tire_percent_at_end:.0f}% worn")
+    
+    if analysis.tire_warning:
+        print(f"\n    WARNING: {analysis.tire_warning}")
+    print("=" * 40)
+
+
+def run_attack_interactive(config: RaceConfig) -> None:
+    """Run attack analysis in interactive mode."""
+    print("\n" + "=" * 50)
+    print("ATTACK ANALYSIS - Interactive Mode")
+    print("=" * 50)
+    
+    compounds = list(config.compounds.keys())
+    
+    try:
+        gap = float(input("\nGap to car ahead (seconds): "))
+        stint_laps = int(input("Laps remaining in stint: "))
+        your_tire_laps = int(input("Laps on your tires: "))
+        target_tire_laps = int(input("Laps on target's tires: "))
+        
+        print(f"\nCompounds: {', '.join(f'{i+1}={c}' for i, c in enumerate(compounds))}")
+        your_idx = int(input("Your compound (enter number): ")) - 1
+        target_idx = int(input("Target compound (enter number): ")) - 1
+        
+    except (ValueError, IndexError):
+        print("Invalid input")
+        return
+    except KeyboardInterrupt:
+        print("\nCancelled")
+        return
+    
+    run_attack_command(config, gap, stint_laps, your_tire_laps, target_tire_laps,
+                      compounds[your_idx], compounds[target_idx])
+
+
+def run_attack_command(config: RaceConfig, gap: float, stint_laps_remaining: int,
+                      your_tire_laps: int, target_tire_laps: int,
+                      your_compound: str, target_compound: str) -> None:
+    """Run attack analysis command."""
+    analysis = analyze_attack(
+        gap_to_target=gap,
+        stint_laps_remaining=stint_laps_remaining,
+        your_compound=your_compound,
+        your_tire_laps=your_tire_laps,
+        target_compound=target_compound,
+        target_tire_laps=target_tire_laps,
+        config=config
+    )
+    print_attack_analysis(analysis, config)
+
+
+# --- Live Mid-Race Strategy Functions ---
+
+def print_live_analysis(analysis: LiveAnalysis, config: RaceConfig) -> None:
+    """Print live mid-race strategy analysis."""
+    print("\n" + "=" * 60)
+    print("LIVE STRATEGY ANALYSIS")
+    print("=" * 60)
+    
+    # Current state
+    print(f"\nLap {analysis.current_lap} of {config.race_laps} | "
+          f"{analysis.remaining_laps} laps remaining")
+    print(f"Tires: {analysis.current_compound}, {analysis.tire_laps} laps worn "
+          f"(~{analysis.tire_wear_percent:.0f}%)")
+    print(f"Tire cliff in: {analysis.remaining_competitive_laps} laps "
+          f"(lap {analysis.current_lap + analysis.remaining_competitive_laps})")
+    
+    if analysis.can_finish_no_pit:
+        print("\n>>> Can finish on current tires")
+    
+    # Strategy table
+    print("\n" + "-" * 60)
+    print("OPTIMAL STRATEGIES FROM HERE")
+    print("-" * 60)
+    
+    table_data = []
+    for i, ls in enumerate(analysis.strategies[:config.top_strategies]):
+        strat = ls.strategy
+        
+        # Format pit info - convert to actual lap number
+        if ls.next_pit_lap is None:
+            pit_info = "No pit"
+            next_tire = "-"
+        else:
+            actual_pit_lap = analysis.current_lap + ls.next_pit_lap
+            pit_info = f"Lap {actual_pit_lap}"
+            next_tire = ls.next_compound or "-"
+        
+        table_data.append([
+            i + 1,
+            strat.format_strategy_string(),
+            pit_info,
+            next_tire,
+            format_time(ls.ert_to_finish)
+        ])
+    
+    headers = ["#", "Strategy", "Pit Lap", "Next Tire", "ERT"]
+    print(tabulate(table_data, headers=headers, tablefmt="github"))
+    
+    # Recommendation
+    rec = analysis.recommended
+    print("\n" + "=" * 60)
+    print(f">>> RECOMMENDED: {rec.strategy.format_strategy_string()}")
+    if rec.next_pit_lap:
+        actual_pit_lap = analysis.current_lap + rec.next_pit_lap
+        print(f"    Pit on lap {actual_pit_lap} for {rec.next_compound}")
+    else:
+        print("    Stay out to finish")
+    print(f"    ERT: {format_time(rec.ert_to_finish)}")
+    print("=" * 60)
+
+
+def run_live_interactive(config: RaceConfig) -> None:
+    """Run live strategy analysis in interactive mode."""
+    print("\n" + "=" * 50)
+    print("LIVE STRATEGY - Interactive Mode")
+    print("=" * 50)
+    print(f"Race: {config.race_laps} laps")
+    
+    compounds = list(config.compounds.keys())
+    
+    try:
+        # Current lap
+        current_lap = int(input("\nCurrent lap number: "))
+        remaining = config.race_laps - current_lap
+        if remaining <= 0:
+            print(f"Error: current lap must be < {config.race_laps}")
+            return
+        print(f"  -> {remaining} laps remaining")
+        
+        # Compound
+        print(f"\nCompounds: {', '.join(f'{i+1}={c}' for i, c in enumerate(compounds))}")
+        compound_idx = int(input("Current tire compound (enter number): ")) - 1
+        compound = compounds[compound_idx]
+        
+        # Tire wear
+        tire_laps = int(input("Laps on current tires: "))
+        
+    except (ValueError, IndexError):
+        print("Invalid input")
+        return
+    except KeyboardInterrupt:
+        print("\nCancelled")
+        return
+    
+    run_live_command(config, current_lap, compound, tire_laps, remaining)
+
+
+def run_live_command(config: RaceConfig, current_lap: int, compound: str, tire_laps: int, remaining: int) -> None:
+    """Run live mid-race strategy analysis."""
+    try:
+        analysis = analyze_live_strategy(
+            current_lap=current_lap,
+            current_compound=compound,
+            tire_laps=tire_laps,
+            remaining_laps=remaining,
+            config=config
+        )
+        print_live_analysis(analysis, config)
+    except ValueError as e:
+        print(f"Error: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="F1 Race Strategy Optimization CLI",
@@ -446,24 +961,95 @@ def main():
     sc_parser = subparsers.add_parser('sc', help='Safety car pit decision analysis (interactive if no args)')
     sc_parser.add_argument('--config', type=str, default='config.yaml',
                           help="Path to the YAML configuration file (default: config.yaml)")
-    # Option 1: Direct stint laps
-    sc_parser.add_argument('--stint-laps', type=int,
-                          help="Laps completed on current tires")
-    # Option 2: Calculate from last pit and current lap
-    sc_parser.add_argument('--last-pit', type=int,
-                          help="Lap number of last pit stop (0 if no pit yet)")
     sc_parser.add_argument('--current-lap', type=int,
-                          help="Current lap number")
-    sc_parser.add_argument('--remaining', type=int,
-                          help="Laps remaining in race")
+                          help="Current lap number (remaining laps calculated from race_laps in config)")
+    sc_parser.add_argument('--stint-laps', type=int,
+                          help="Laps on current tires")
     sc_parser.add_argument('--compound', type=str,
                           choices=['Soft', 'Medium', 'Hard'],
                           help="Current tire compound")
     sc_parser.add_argument('--pos-loss', type=int, default=0,
                           help="Estimated positions lost if you pit (cars that will stay out)")
     
-    args = parser.parse_args()
+    # Tires command (tire domain analysis)
+    tires_parser = subparsers.add_parser('tires', help='Analyze tire compound domains and crossover points')
+    tires_parser.add_argument('--config', type=str, default='config.yaml',
+                             help="Path to the YAML configuration file (default: config.yaml)")
+    tires_parser.add_argument('--mode', type=str, choices=['normal', 'push', 'conserve'],
+                             default='normal', help="Pace mode for analysis (default: normal)")
+    tires_parser.add_argument('--starting-wear', type=int, default=0,
+                             help="Starting tire wear in laps (default: 0 = fresh)")
+    tires_parser.add_argument('--chart', action='store_true',
+                             help="Display ASCII domain chart")
     
+    # Undercut command
+    undercut_parser = subparsers.add_parser('undercut', help='Undercut/overcut analysis vs rival')
+    undercut_parser.add_argument('--config', type=str, default='config.yaml',
+                                help="Path to the YAML configuration file (default: config.yaml)")
+    undercut_parser.add_argument('--gap', type=float,
+                                help="Gap to rival in seconds (positive = ahead, negative = behind)")
+    undercut_parser.add_argument('--current-lap', type=int,
+                                help="Current race lap")
+    undercut_parser.add_argument('--rival-pit', type=int,
+                                help="Expected lap rival will pit")
+    undercut_parser.add_argument('--your-tire-laps', type=int,
+                                help="Laps on your current tires")
+    undercut_parser.add_argument('--rival-tire-laps', type=int,
+                                help="Laps on rival's current tires")
+    undercut_parser.add_argument('--your-compound', type=str, choices=['Soft', 'Medium', 'Hard'],
+                                help="Your current tire compound")
+    undercut_parser.add_argument('--rival-compound', type=str, choices=['Soft', 'Medium', 'Hard'],
+                                help="Rival's current tire compound")
+    undercut_parser.add_argument('--pit-to', type=str, choices=['Soft', 'Medium', 'Hard'],
+                                help="Compound to pit onto (default: fastest)")
+    
+    # DRS command
+    drs_parser = subparsers.add_parser('drs', help='DRS defense analysis - should you push or conserve?')
+    drs_parser.add_argument('--config', type=str, default='config.yaml',
+                           help="Path to the YAML configuration file (default: config.yaml)")
+    drs_parser.add_argument('--gap', type=float,
+                           help="Gap to car behind in seconds")
+    drs_parser.add_argument('--stint-laps-remaining', type=int,
+                           help="Laps remaining until stint end")
+    drs_parser.add_argument('--your-tire-laps', type=int,
+                           help="Laps on your current tires")
+    drs_parser.add_argument('--attacker-tire-laps', type=int,
+                           help="Laps on attacker's tires")
+    drs_parser.add_argument('--your-compound', type=str, choices=['Soft', 'Medium', 'Hard'],
+                           help="Your tire compound")
+    drs_parser.add_argument('--attacker-compound', type=str, choices=['Soft', 'Medium', 'Hard'],
+                           help="Attacker's tire compound")
+    
+    # Attack command
+    attack_parser = subparsers.add_parser('attack', help='Attack analysis - should you chase or let them come back?')
+    attack_parser.add_argument('--config', type=str, default='config.yaml',
+                              help="Path to the YAML configuration file (default: config.yaml)")
+    attack_parser.add_argument('--gap', type=float,
+                              help="Gap to car ahead in seconds")
+    attack_parser.add_argument('--stint-laps-remaining', type=int,
+                              help="Laps remaining until stint end")
+    attack_parser.add_argument('--your-tire-laps', type=int,
+                              help="Laps on your current tires")
+    attack_parser.add_argument('--target-tire-laps', type=int,
+                              help="Laps on target's tires")
+    attack_parser.add_argument('--your-compound', type=str, choices=['Soft', 'Medium', 'Hard'],
+                              help="Your tire compound")
+    attack_parser.add_argument('--target-compound', type=str, choices=['Soft', 'Medium', 'Hard'],
+                              help="Target's tire compound")
+    
+    # Live mid-race strategy command
+    live_parser = subparsers.add_parser('live', help='Mid-race strategy recalculation from current position')
+    live_parser.add_argument('--config', type=str, default='config.yaml',
+                            help="Path to the YAML configuration file (default: config.yaml)")
+    live_parser.add_argument('--current-lap', type=int,
+                            help="Current lap number (remaining laps calculated from race_laps in config)")
+    live_parser.add_argument('--compound', type=str, choices=['Soft', 'Medium', 'Hard'],
+                            help="Current tire compound")
+    live_parser.add_argument('--tire-laps', type=int,
+                            help="Laps on current tires")
+    
+    args = parser.parse_args()
+
     # Default to race command if no subcommand but --config is provided
     if args.command is None:
         if args.config:
@@ -482,29 +1068,91 @@ def main():
     except Exception as e:
         print(f"Error loading configuration: {e}")
         return
-    
+
     # Route to appropriate command
     if args.command == 'race':
         run_race_command(config)
     elif args.command == 'sc':
         # Check if we have enough args for non-interactive mode
-        has_stint_info = (args.stint_laps is not None or 
-                         (args.last_pit is not None and args.current_lap is not None))
-        has_required = has_stint_info and args.remaining is not None and args.compound is not None
+        has_required = all([
+            args.current_lap is not None,
+            args.stint_laps is not None,
+            args.compound is not None
+        ])
         
         if not has_required:
             # Interactive mode
             run_sc_interactive(config)
         else:
-            # Calculate stint_laps from either direct input or last-pit + current-lap
-            if args.stint_laps is not None:
-                stint_laps = args.stint_laps
-            else:
-                stint_laps = args.current_lap - args.last_pit
-                if stint_laps < 0:
-                    print(f"Error: current-lap ({args.current_lap}) must be >= last-pit ({args.last_pit})")
-                    return
-            run_sc_command(config, stint_laps, args.remaining, args.compound, args.pos_loss)
+            # Calculate remaining laps from config
+            remaining = config.race_laps - args.current_lap
+            if remaining <= 0:
+                print(f"Error: current-lap ({args.current_lap}) must be < race_laps ({config.race_laps})")
+                return
+            run_sc_command(config, args.stint_laps, remaining, args.compound, args.pos_loss)
+    elif args.command == 'tires':
+        run_tires_command(config, args.mode, args.starting_wear, args.chart)
+    elif args.command == 'undercut':
+        has_required = all([
+            args.gap is not None,
+            args.current_lap is not None,
+            args.rival_pit is not None,
+            args.your_tire_laps is not None,
+            args.rival_tire_laps is not None,
+            args.your_compound is not None,
+            args.rival_compound is not None
+        ])
+        if not has_required:
+            run_undercut_interactive(config)
+        else:
+            run_undercut_command(config, args.gap, args.current_lap, args.rival_pit,
+                               args.your_tire_laps, args.rival_tire_laps,
+                               args.your_compound, args.rival_compound, args.pit_to)
+    elif args.command == 'drs':
+        has_required = all([
+            args.gap is not None,
+            args.stint_laps_remaining is not None,
+            args.your_tire_laps is not None,
+            args.attacker_tire_laps is not None,
+            args.your_compound is not None,
+            args.attacker_compound is not None
+        ])
+        if not has_required:
+            run_drs_interactive(config)
+        else:
+            run_drs_command(config, args.gap, args.stint_laps_remaining,
+                          args.your_tire_laps, args.attacker_tire_laps,
+                          args.your_compound, args.attacker_compound)
+    elif args.command == 'attack':
+        has_required = all([
+            args.gap is not None,
+            args.stint_laps_remaining is not None,
+            args.your_tire_laps is not None,
+            args.target_tire_laps is not None,
+            args.your_compound is not None,
+            args.target_compound is not None
+        ])
+        if not has_required:
+            run_attack_interactive(config)
+        else:
+            run_attack_command(config, args.gap, args.stint_laps_remaining,
+                             args.your_tire_laps, args.target_tire_laps,
+                             args.your_compound, args.target_compound)
+    elif args.command == 'live':
+        has_required = all([
+            args.current_lap is not None,
+            args.compound is not None,
+            args.tire_laps is not None
+        ])
+        if not has_required:
+            run_live_interactive(config)
+        else:
+            # Calculate remaining laps from config
+            remaining = config.race_laps - args.current_lap
+            if remaining <= 0:
+                print(f"Error: current-lap ({args.current_lap}) must be < race_laps ({config.race_laps})")
+                return
+            run_live_command(config, args.current_lap, args.compound, args.tire_laps, remaining)
 
 
 if __name__ == "__main__":

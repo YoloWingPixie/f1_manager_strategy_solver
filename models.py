@@ -80,12 +80,21 @@ class RaceConfig:
     sc_conserve_laps: int = 3
     sc_conserve_factor: float = 0.5
     position_loss_value: float = 2.5  # Seconds penalty per position lost
+    # Tactical analysis settings
+    drs_threshold_seconds: float = 1.0
+    dirty_air_loss_per_lap: float = 0.5
+    inlap_push_gain: float = 0.3
+    outlap_penalty: float = 1.5
 
     def get_pace_mode(self, mode_name: str) -> PaceMode:
         """Get pace mode by name, returns normal mode for 'normal'."""
         if mode_name == 'normal':
             return PaceMode(name='normal', delta_per_lap=0.0, degradation_factor=1.0)
         return self.pace_modes[mode_name]
+    
+    def has_attack_mode(self) -> bool:
+        """Check if attack mode is configured."""
+        return 'attack' in self.pace_modes
 
 
 @dataclass
@@ -171,4 +180,184 @@ class SCAnalysis:
     pace_deficit_per_lap: float  # How much slower per lap if staying out vs fresh tires
     total_time_loss: float  # Total time lost over remaining laps
     risk_assessment: str  # "LOW", "MODERATE", "HIGH"
+
+
+@dataclass
+class TireDomain:
+    """A range of laps where one compound is fastest."""
+    compound: str
+    start_lap: int
+    end_lap: int
+    start_laptime_s: float
+    end_laptime_s: float
+
+
+@dataclass
+class CrossoverPoint:
+    """Point where one compound becomes faster than another."""
+    lap: int
+    from_compound: str
+    from_laptime_s: float
+    to_compound: str
+    to_laptime_s: float
+
+
+@dataclass
+class TireDomainAnalysis:
+    """Result of tire domain analysis showing which compound is fastest at each lap."""
+    domains: list[TireDomain]
+    crossover_points: list[CrossoverPoint]
+    compound_details: dict[str, dict]  # Compound name -> {base_pace, deg, cliff, etc.}
+    max_analysis_lap: int  # How far we analyzed
+
+
+@dataclass
+class UndercutAnalysis:
+    """Result of undercut/overcut analysis."""
+    # Current state
+    gap_to_rival: float  # Positive = ahead, negative = behind
+    current_lap: int
+    rival_pit_lap: int
+    laps_until_rival_pits: int
+    
+    # Your tire state
+    your_compound: str
+    your_tire_laps: int
+    your_wear_percent: float
+    
+    # Rival tire state
+    rival_compound: str
+    rival_tire_laps: int
+    rival_wear_percent: float
+    
+    # Pit-to compound
+    pit_to_compound: str
+    
+    # Undercut analysis
+    undercut_viable: bool
+    fresh_tire_advantage: float  # Pace advantage per lap on fresh tires
+    undercut_window_laps: int  # Laps you'd be on fresh tires before rival pits
+    time_gained_undercut: float  # Total time gained during undercut window
+    projected_gap_after_undercut: float  # Gap after rival pits (positive = ahead)
+    
+    # Overcut/stay out analysis
+    overcut_viable: bool
+    time_lost_staying_out: float  # Time lost while rival is on fresh tires
+    projected_gap_after_overcut: float
+    
+    # Recommendation
+    recommendation: str  # "UNDERCUT", "OVERCUT", or "STAY_OUT"
+    recommendation_reason: str
+
+
+@dataclass
+class ModeScenario:
+    """A scenario for DRS defense or attack analysis."""
+    name: str  # e.g., "PUSH", "CONSERVE", "BURST_PUSH"
+    mode_sequence: list[tuple[str, int]]  # [(mode, laps), ...]
+    final_gap: float
+    tire_wear_at_end: float  # Effective laps of wear
+    tire_percent_at_end: float
+    exceeds_tire_life: bool
+    cliff_lap: int | None  # Lap when tires cliff (if applicable)
+    sustainable: bool
+    description: str
+
+
+@dataclass
+class DRSAnalysis:
+    """Result of DRS defense analysis."""
+    # Current state
+    gap_to_attacker: float
+    stint_laps_remaining: int
+    in_drs_range: bool
+    
+    # Your tire state
+    your_compound: str
+    your_tire_laps: int
+    your_wear_percent: float
+    your_max_competitive_laps: int
+    
+    # Attacker tire state
+    attacker_compound: str
+    attacker_tire_laps: int
+    attacker_wear_percent: float
+    
+    # Pace comparison
+    base_pace_delta: float  # Your pace vs attacker (positive = you're slower)
+    
+    # Scenarios analyzed
+    scenarios: list[ModeScenario]
+    
+    # Optimal burst push
+    optimal_push_laps: int  # Optimal laps to push before conserving
+    
+    # Recommendation
+    recommendation: str  # "PUSH", "CONSERVE", "BURST_PUSH"
+    recommended_scenario: ModeScenario
+
+
+@dataclass
+class LiveStrategy:
+    """A strategy option for mid-race recalculation."""
+    strategy: Strategy
+    next_pit_lap: int | None  # Lap number of next pit (None = no more pits)
+    next_compound: str | None  # Compound after next pit
+    remaining_on_current: int  # Laps before current tire hits cliff
+    ert_to_finish: float
+
+
+@dataclass
+class LiveAnalysis:
+    """Result of mid-race strategy recalculation."""
+    # Current state
+    current_lap: int  # Current lap number
+    current_compound: str
+    tire_laps: int  # Laps on current tires
+    remaining_laps: int  # Laps remaining in race
+    tire_wear_percent: float
+    remaining_competitive_laps: int  # Laps before cliff
+    
+    # Can finish without pitting?
+    can_finish_no_pit: bool
+    no_pit_ert: float | None  # ERT if staying out to end
+    
+    # Best strategies from here
+    strategies: list[LiveStrategy]
+    
+    # Recommendation
+    recommended: LiveStrategy
+
+
+@dataclass
+class AttackAnalysis:
+    """Result of attack/catch analysis."""
+    # Current state
+    gap_to_target: float
+    stint_laps_remaining: int
+    drs_threshold: float
+    
+    # Your tire state
+    your_compound: str
+    your_tire_laps: int
+    your_wear_percent: float
+    your_max_competitive_laps: int
+    
+    # Target tire state
+    target_compound: str
+    target_tire_laps: int
+    target_wear_percent: float
+    
+    # Natural convergence
+    natural_closing_rate: float  # Positive = closing
+    laps_to_drs_natural: int | None  # None if not reachable
+    can_reach_drs_naturally: bool
+    
+    # Scenarios analyzed
+    scenarios: list[ModeScenario]
+    
+    # Recommendation
+    recommendation: str  # "STAY_ON_PLAN", "PUSH", "ATTACK"
+    recommended_scenario: ModeScenario
+    tire_warning: str | None  # Warning if tires would be burned by stint end
 
