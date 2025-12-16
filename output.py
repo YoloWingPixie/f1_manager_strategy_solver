@@ -25,46 +25,6 @@ def format_laptime(seconds: float) -> str:
     return f"{minutes}:{secs:05.2f}"
 
 
-def is_soft_opener(strat: Strategy) -> bool:
-    """Check if strategy opens on Soft tires."""
-    return strat.compound_sequence[0] == 'Soft'
-
-
-def is_soft_bookend(strat: Strategy) -> bool:
-    """Check if strategy starts and ends on Soft with different compound in middle."""
-    seq = strat.compound_sequence
-    if len(seq) < 3:
-        return False
-    # Starts with Soft, ends with Soft, middle is different
-    return seq[0] == 'Soft' and seq[-1] == 'Soft' and any(c != 'Soft' for c in seq[1:-1])
-
-
-def find_preferred_strategies(strategies: list[Strategy], best_ert: float) -> dict[str, Strategy | None]:
-    """
-    Find best strategies matching racing preferences:
-    - soft_opener_1stop: Best 1-stop starting on Soft (Soft -> M/H)
-    - soft_bookend_2stop: Best 2-stop with Soft bookends (Soft -> M/H -> Soft)
-    """
-    preferred = {
-        'soft_opener_1stop': None,
-        'soft_bookend_2stop': None,
-    }
-    
-    for strat in strategies:
-        # 1-stop soft opener: Soft -> Medium or Soft -> Hard
-        if strat.pit_stops == 1 and is_soft_opener(strat):
-            if strat.compound_sequence[1] in ('Medium', 'Hard'):
-                if preferred['soft_opener_1stop'] is None or strat.ert < preferred['soft_opener_1stop'].ert:
-                    preferred['soft_opener_1stop'] = strat
-        
-        # 2-stop soft bookend: Soft -> X -> Soft where X is Medium or Hard
-        if strat.pit_stops == 2 and is_soft_bookend(strat):
-            if preferred['soft_bookend_2stop'] is None or strat.ert < preferred['soft_bookend_2stop'].ert:
-                preferred['soft_bookend_2stop'] = strat
-    
-    return preferred
-
-
 def print_top_strategies(strategies: list[Strategy], config: RaceConfig) -> None:
     """Print the top N strategies table."""
     push_cfg = config.pace_modes['push']
@@ -89,44 +49,6 @@ def print_top_strategies(strategies: list[Strategy], config: RaceConfig) -> None
 
     headers = ["Rank", "Strategy (Mode)", "Stops", "Stint Split", "Pit Laps", "ERT"]
     print(tabulate(output_table, headers=headers, tablefmt="github"))
-
-
-def print_preferred_strategies(
-    preferred: dict[str, Strategy | None],
-    best_ert: float,
-    config: RaceConfig
-) -> None:
-    """Print preferred strategy patterns based on racing preferences."""
-    has_any = any(s is not None for s in preferred.values())
-    
-    print("\n\n" + "=" * 80)
-    print("PREFERRED STRATEGY PATTERNS")
-    print("=" * 80)
-    
-    if not has_any:
-        print("\nNo strategies found matching preferred patterns.")
-        print("(Soft opener 1-stop or Soft bookend 2-stop)")
-        return
-    
-    # Soft opener 1-stop
-    strat = preferred.get('soft_opener_1stop')
-    if strat:
-        delta = strat.ert - best_ert
-        print(f"\n1-STOP SOFT OPENER (Soft -> M/H for track position at start)")
-        print(f"  Strategy: {strat.format_strategy_string()}")
-        print(f"  Stint Split: {strat.format_split_string()}")
-        print(f"  Pit Lap: {strat.format_pit_laps()}")
-        print(f"  ERT: {format_time(strat.ert)} ({'+' if delta >= 0 else ''}{delta:.2f}s vs optimal)")
-    
-    # Soft bookend 2-stop
-    strat = preferred.get('soft_bookend_2stop')
-    if strat:
-        delta = strat.ert - best_ert
-        print(f"\n2-STOP SOFT BOOKEND (Soft -> M/H -> Soft for start & finish pace)")
-        print(f"  Strategy: {strat.format_strategy_string()}")
-        print(f"  Stint Split: {strat.format_split_string()}")
-        print(f"  Pit Laps: {strat.format_pit_laps()}")
-        print(f"  ERT: {format_time(strat.ert)} ({'+' if delta >= 0 else ''}{delta:.2f}s vs optimal)")
 
 
 def print_clean_air_strategy(

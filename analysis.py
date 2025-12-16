@@ -14,7 +14,7 @@ from core import (
     get_tire_max_laps, calculate_ert, find_optimal_modes, check_inventory,
     calculate_min_stint, calculate_effective_wear, calculate_remaining_competitive_laps,
     calculate_stint_ert_with_wear, calculate_lap_time_at_wear, estimate_tire_delta_per_lap,
-    get_degradation_factor
+    get_degradation_factor, calculate_wear_percent, best_by_ert, find_best_two_stint_modes
 )
 
 
@@ -149,8 +149,8 @@ def find_clean_air_strategy(
     one_stop_candidates = [s for s in all_strategies if s.pit_stops == 1 and is_valid_clean_air(s)]
     two_stop_candidates = [s for s in all_strategies if s.pit_stops == 2 and is_valid_clean_air(s)]
 
-    best_1stop = min(one_stop_candidates, key=lambda s: s.ert) if one_stop_candidates else None
-    best_2stop = min(two_stop_candidates, key=lambda s: s.ert) if two_stop_candidates else None
+    best_1stop = best_by_ert(one_stop_candidates)
+    best_2stop = best_by_ert(two_stop_candidates)
 
     # Rule 3: Prefer 1-stop if within 102% of 2-stop time
     if best_1stop and best_2stop:
@@ -179,7 +179,7 @@ def generate_continuation_strategies(
     min_stint = max(floor(pit_loss / 2), 5) if not use_sc_pit_loss else 1
     
     compound = config.compounds[current_compound]
-    remaining_on_current = calculate_remaining_competitive_laps(compound, current_wear, config)
+    remaining_on_current = calculate_remaining_competitive_laps(compound, current_wear)
     
     strategies: list[Strategy] = []
     compound_names = list(config.compounds.keys())
@@ -216,24 +216,11 @@ def generate_continuation_strategies(
                 stints = [(current_compound, stay_laps), (new_compound, laps_after_pit)]
                 
                 # Find best mode combination
-                best_ert = float('inf')
-                best_modes = ('normal', 'normal')
-                
-                for mode1 in PACE_MODES:
-                    for mode2 in PACE_MODES:
-                        # First stint with wear
-                        ert1 = calculate_stint_ert_with_wear(
-                            compound, stay_laps, current_wear, mode1, config
-                        )
-                        # Second stint fresh
-                        ert2 = calculate_stint_ert_with_wear(
-                            new_comp, laps_after_pit, 0, mode2, config
-                        )
-                        total = ert1 + ert2 + config.pit_loss_seconds  # Green flag pit
-                        
-                        if total < best_ert:
-                            best_ert = total
-                            best_modes = (mode1, mode2)
+                best_modes, best_ert = find_best_two_stint_modes(
+                    compound, stay_laps, current_wear,
+                    new_comp, laps_after_pit, 0,
+                    config.pit_loss_seconds, config
+                )
                 
                 if best_ert < float('inf'):
                     strategies.append(Strategy(
@@ -283,19 +270,12 @@ def generate_continuation_strategies(
                     
                     stints = [(new_compound, first_stint_laps), (second_compound, second_stint_laps)]
                     
-                    best_ert = float('inf')
-                    best_modes = ('normal', 'normal')
-                    
-                    for mode1 in PACE_MODES:
-                        for mode2 in PACE_MODES:
-                            ert1 = calculate_stint_ert_with_wear(new_comp, first_stint_laps, 0, mode1, config)
-                            ert2 = calculate_stint_ert_with_wear(second_comp, second_stint_laps, 0, mode2, config)
-                            # SC pit + green flag pit
-                            total = ert1 + ert2 + pit_loss + config.pit_loss_seconds
-                            
-                            if total < best_ert:
-                                best_ert = total
-                                best_modes = (mode1, mode2)
+                    # Find best mode combination (SC pit + green flag pit)
+                    best_modes, best_ert = find_best_two_stint_modes(
+                        new_comp, first_stint_laps, 0,
+                        second_comp, second_stint_laps, 0,
+                        pit_loss + config.pit_loss_seconds, config
+                    )
                     
                     if best_ert < float('inf'):
                         strategies.append(Strategy(
@@ -329,8 +309,8 @@ def analyze_safety_car(
     
     # Calculate tire wear (SC laps have reduced wear)
     effective_wear = calculate_effective_wear(stint_laps, config.sc_conserve_laps, config)
-    remaining_competitive = calculate_remaining_competitive_laps(compound, effective_wear, config)
-    wear_percent = (effective_wear / compound.max_competitive_laps) * 100
+    remaining_competitive = calculate_remaining_competitive_laps(compound, effective_wear)
+    wear_percent = calculate_wear_percent(effective_wear, compound.max_competitive_laps)
     
     # Key question: Can we finish without pitting?
     can_finish_no_pit = remaining_competitive >= remaining_laps
@@ -376,9 +356,9 @@ def analyze_safety_car(
     )
     
     # Find best of each category
-    best_stay_out = min(stay_out_strategies, key=lambda s: s.ert) if stay_out_strategies else None
-    best_pit_same = min(pit_same_compound_strategies, key=lambda s: s.ert) if pit_same_compound_strategies else None
-    best_pit_optimal = min(pit_now_strategies, key=lambda s: s.ert) if pit_now_strategies else None
+    best_stay_out = best_by_ert(stay_out_strategies)
+    best_pit_same = best_by_ert(pit_same_compound_strategies)
+    best_pit_optimal = best_by_ert(pit_now_strategies)
     
     # Use best pit option (may be same compound or different)
     best_pit_now = best_pit_optimal
@@ -560,14 +540,12 @@ def analyze_undercut(
     pit_to_comp = config.compounds[pit_to_compound]
     
     # Calculate current wear percentages
-    your_wear_pct = (your_tire_laps / your_comp.max_competitive_laps) * 100
-    rival_wear_pct = (rival_tire_laps / rival_comp.max_competitive_laps) * 100
+    your_wear_pct = calculate_wear_percent(your_tire_laps, your_comp.max_competitive_laps)
+    rival_wear_pct = calculate_wear_percent(rival_tire_laps, rival_comp.max_competitive_laps)
     
     # Calculate pace on worn vs fresh tires
     your_current_pace = calculate_lap_time_at_wear(your_comp, your_tire_laps, 'normal', config)
     fresh_pace = calculate_lap_time_at_wear(pit_to_comp, 0, 'normal', config)
-    rival_worn_pace = calculate_lap_time_at_wear(rival_comp, rival_tire_laps, 'normal', config)
-    
     fresh_tire_advantage = your_current_pace - fresh_pace  # How much faster you'd be on fresh
     
     # UNDERCUT SCENARIO: You pit now, rival pits at rival_pit_lap
@@ -655,22 +633,29 @@ def analyze_undercut(
     )
 
 
-# --- DRS Defense Analysis ---
+# --- Gap Simulation (shared by Defense and Attack) ---
 
-def simulate_gap_scenario(
+def simulate_scenario(
     initial_gap: float,
     stint_laps: int,
     your_compound,  # Compound
     your_start_wear: int,
-    attacker_compound,  # Compound
-    attacker_start_wear: int,
+    other_compound,  # Compound
+    other_start_wear: int,
     your_modes: list[tuple[str, int]],  # [(mode, laps), ...]
-    config: RaceConfig
+    config: RaceConfig,
+    is_defense: bool = True,
+    drs_threshold: float | None = None
 ) -> ModeScenario:
-    """Simulate a gap defense scenario with specified pace modes."""
+    """
+    Simulate a gap scenario with specified pace modes.
+    
+    For defense (is_defense=True): gap is how far ahead you are (positive = ahead).
+    For attack (is_defense=False): gap is how far behind the target is (positive = you're behind).
+    """
     gap = initial_gap
-    your_wear = your_start_wear
-    attacker_wear = attacker_start_wear
+    your_wear = float(your_start_wear)
+    other_wear = float(other_start_wear)
     
     mode_idx = 0
     mode_laps_remaining = your_modes[0][1] if your_modes else 0
@@ -686,16 +671,19 @@ def simulate_gap_scenario(
             mode_laps_remaining = your_modes[mode_idx][1]
         
         # Calculate pace for this lap
-        your_pace = calculate_lap_time_at_wear(your_compound, your_wear, current_mode, config)
-        attacker_pace = calculate_lap_time_at_wear(attacker_compound, attacker_wear, 'normal', config)
+        your_pace = calculate_lap_time_at_wear(your_compound, int(your_wear), current_mode, config)
+        other_pace = calculate_lap_time_at_wear(other_compound, int(other_wear), 'normal', config)
         
-        # Update gap (positive = you're ahead)
-        gap -= (your_pace - attacker_pace)
+        # Update gap based on scenario type
+        if is_defense:
+            gap -= (your_pace - other_pace)  # Decreases if you're slower
+        else:
+            gap -= (other_pace - your_pace)  # Decreases if you're faster (catching)
         
         # Update wear
         pace_mode = config.get_pace_mode(current_mode)
         your_wear += pace_mode.degradation_factor
-        attacker_wear += 1  # Attacker on normal mode
+        other_wear += 1  # Other car on normal mode
         
         mode_laps_remaining -= 1
         
@@ -704,25 +692,37 @@ def simulate_gap_scenario(
             cliff_lap = lap + your_start_wear
     
     # Calculate final state
-    tire_wear_at_end = your_wear
-    tire_percent = (your_wear / your_compound.max_competitive_laps) * 100
+    tire_percent = calculate_wear_percent(your_wear, your_compound.max_competitive_laps)
     exceeds_life = your_wear > your_compound.max_competitive_laps
-    sustainable = gap > 0 and not exceeds_life
     
-    # Build description
+    # Sustainability depends on scenario type
+    if is_defense:
+        sustainable = gap > 0 and not exceeds_life
+    else:
+        sustainable = (drs_threshold is not None and gap <= drs_threshold) and not exceeds_life
+    
     mode_str = " -> ".join(f"{m}({l})" for m, l in your_modes)
     
+    # Name logic: single mode uses that name, multiple modes = BURST_PUSH
+    if len(your_modes) == 1:
+        name = your_modes[0][0].upper()
+    else:
+        name = "BURST_PUSH"
+    
     return ModeScenario(
-        name=your_modes[0][0].upper() if len(your_modes) == 1 else "BURST_PUSH",
+        name=name,
         mode_sequence=your_modes,
         final_gap=gap,
-        tire_wear_at_end=tire_wear_at_end,
+        tire_wear_at_end=your_wear,
         tire_percent_at_end=tire_percent,
         exceeds_tire_life=exceeds_life,
         cliff_lap=cliff_lap,
         sustainable=sustainable,
         description=mode_str
     )
+
+
+# --- DRS Defense Analysis ---
 
 
 def analyze_drs_defense(
@@ -742,8 +742,8 @@ def analyze_drs_defense(
     
     in_drs = gap_to_attacker < config.drs_threshold_seconds
     
-    your_wear_pct = (your_tire_laps / your_comp.max_competitive_laps) * 100
-    attacker_wear_pct = (attacker_tire_laps / attacker_comp.max_competitive_laps) * 100
+    your_wear_pct = calculate_wear_percent(your_tire_laps, your_comp.max_competitive_laps)
+    attacker_wear_pct = calculate_wear_percent(attacker_tire_laps, attacker_comp.max_competitive_laps)
     
     # Base pace comparison (both on normal mode)
     your_pace = calculate_lap_time_at_wear(your_comp, your_tire_laps, 'normal', config)
@@ -753,29 +753,31 @@ def analyze_drs_defense(
     scenarios: list[ModeScenario] = []
     
     # Scenario 1: CONSERVE (accept DRS, defend on track)
-    conserve_scenario = simulate_gap_scenario(
+    conserve_scenario = simulate_scenario(
         initial_gap=gap_to_attacker,
         stint_laps=stint_laps_remaining,
         your_compound=your_comp,
         your_start_wear=your_tire_laps,
-        attacker_compound=attacker_comp,
-        attacker_start_wear=attacker_tire_laps,
+        other_compound=attacker_comp,
+        other_start_wear=attacker_tire_laps,
         your_modes=[('conserve', stint_laps_remaining)],
-        config=config
+        config=config,
+        is_defense=True
     )
     conserve_scenario.name = "CONSERVE"
     scenarios.append(conserve_scenario)
     
     # Scenario 2: PUSH all stint
-    push_scenario = simulate_gap_scenario(
+    push_scenario = simulate_scenario(
         initial_gap=gap_to_attacker,
         stint_laps=stint_laps_remaining,
         your_compound=your_comp,
         your_start_wear=your_tire_laps,
-        attacker_compound=attacker_comp,
-        attacker_start_wear=attacker_tire_laps,
+        other_compound=attacker_comp,
+        other_start_wear=attacker_tire_laps,
         your_modes=[('push', stint_laps_remaining)],
-        config=config
+        config=config,
+        is_defense=True
     )
     push_scenario.name = "PUSH"
     scenarios.append(push_scenario)
@@ -786,15 +788,16 @@ def analyze_drs_defense(
     
     for push_laps in range(1, stint_laps_remaining):
         conserve_laps = stint_laps_remaining - push_laps
-        burst_scenario = simulate_gap_scenario(
+        burst_scenario = simulate_scenario(
             initial_gap=gap_to_attacker,
             stint_laps=stint_laps_remaining,
             your_compound=your_comp,
             your_start_wear=your_tire_laps,
-            attacker_compound=attacker_comp,
-            attacker_start_wear=attacker_tire_laps,
+            other_compound=attacker_comp,
+            other_start_wear=attacker_tire_laps,
             your_modes=[('push', push_laps), ('conserve', conserve_laps)],
-            config=config
+            config=config,
+            is_defense=True
         )
         
         # Prefer sustainable scenarios with best final gap
@@ -840,77 +843,6 @@ def analyze_drs_defense(
 
 # --- Attack/Catch Analysis ---
 
-def simulate_attack_scenario(
-    initial_gap: float,
-    stint_laps: int,
-    your_compound,  # Compound
-    your_start_wear: int,
-    target_compound,  # Compound
-    target_start_wear: int,
-    your_modes: list[tuple[str, int]],
-    drs_threshold: float,
-    config: RaceConfig
-) -> ModeScenario:
-    """Simulate an attack scenario, tracking gap to target."""
-    gap = initial_gap
-    your_wear = float(your_start_wear)
-    target_wear = float(target_start_wear)
-    
-    mode_idx = 0
-    mode_laps_remaining = your_modes[0][1] if your_modes else 0
-    current_mode = your_modes[0][0] if your_modes else 'normal'
-    
-    cliff_lap = None
-    laps_to_drs = None
-    
-    for lap in range(stint_laps):
-        # Advance to next mode if needed
-        while mode_laps_remaining == 0 and mode_idx < len(your_modes) - 1:
-            mode_idx += 1
-            current_mode = your_modes[mode_idx][0]
-            mode_laps_remaining = your_modes[mode_idx][1]
-        
-        # Calculate pace
-        your_pace = calculate_lap_time_at_wear(your_compound, int(your_wear), current_mode, config)
-        target_pace = calculate_lap_time_at_wear(target_compound, int(target_wear), 'normal', config)
-        
-        # Update gap (we want to close it, so subtract our gain)
-        gap -= (target_pace - your_pace)
-        
-        # Check if we've reached DRS
-        if laps_to_drs is None and gap <= drs_threshold:
-            laps_to_drs = lap + 1
-        
-        # Update wear
-        pace_mode = config.get_pace_mode(current_mode)
-        your_wear += pace_mode.degradation_factor
-        target_wear += 1
-        
-        mode_laps_remaining -= 1
-        
-        # Check for cliff
-        if cliff_lap is None and your_wear >= your_compound.max_competitive_laps:
-            cliff_lap = lap + your_start_wear
-    
-    tire_percent = (your_wear / your_compound.max_competitive_laps) * 100
-    exceeds_life = your_wear > your_compound.max_competitive_laps
-    sustainable = gap <= drs_threshold and not exceeds_life
-    
-    mode_str = " -> ".join(f"{m}({l})" for m, l in your_modes)
-    
-    return ModeScenario(
-        name=your_modes[0][0].upper(),
-        mode_sequence=your_modes,
-        final_gap=gap,
-        tire_wear_at_end=your_wear,
-        tire_percent_at_end=tire_percent,
-        exceeds_tire_life=exceeds_life,
-        cliff_lap=cliff_lap,
-        sustainable=sustainable,
-        description=mode_str
-    )
-
-
 def analyze_attack(
     gap_to_target: float,
     stint_laps_remaining: int,
@@ -927,8 +859,8 @@ def analyze_attack(
     target_comp = config.compounds[target_compound]
     drs_threshold = config.drs_threshold_seconds
     
-    your_wear_pct = (your_tire_laps / your_comp.max_competitive_laps) * 100
-    target_wear_pct = (target_tire_laps / target_comp.max_competitive_laps) * 100
+    your_wear_pct = calculate_wear_percent(your_tire_laps, your_comp.max_competitive_laps)
+    target_wear_pct = calculate_wear_percent(target_tire_laps, target_comp.max_competitive_laps)
     
     # Calculate natural convergence rate
     your_pace = calculate_lap_time_at_wear(your_comp, your_tire_laps, 'normal', config)
@@ -946,47 +878,50 @@ def analyze_attack(
     scenarios: list[ModeScenario] = []
     
     # Scenario 1: STAY ON PLAN (normal mode)
-    stay_scenario = simulate_attack_scenario(
+    stay_scenario = simulate_scenario(
         initial_gap=gap_to_target,
         stint_laps=stint_laps_remaining,
         your_compound=your_comp,
         your_start_wear=your_tire_laps,
-        target_compound=target_comp,
-        target_start_wear=target_tire_laps,
+        other_compound=target_comp,
+        other_start_wear=target_tire_laps,
         your_modes=[('normal', stint_laps_remaining)],
-        drs_threshold=drs_threshold,
-        config=config
+        config=config,
+        is_defense=False,
+        drs_threshold=drs_threshold
     )
     stay_scenario.name = "STAY_ON_PLAN"
     scenarios.append(stay_scenario)
     
     # Scenario 2: PUSH mode
-    push_scenario = simulate_attack_scenario(
+    push_scenario = simulate_scenario(
         initial_gap=gap_to_target,
         stint_laps=stint_laps_remaining,
         your_compound=your_comp,
         your_start_wear=your_tire_laps,
-        target_compound=target_comp,
-        target_start_wear=target_tire_laps,
+        other_compound=target_comp,
+        other_start_wear=target_tire_laps,
         your_modes=[('push', stint_laps_remaining)],
-        drs_threshold=drs_threshold,
-        config=config
+        config=config,
+        is_defense=False,
+        drs_threshold=drs_threshold
     )
     push_scenario.name = "PUSH"
     scenarios.append(push_scenario)
     
     # Scenario 3: ATTACK mode (if available)
     if config.has_attack_mode():
-        attack_scenario = simulate_attack_scenario(
+        attack_scenario = simulate_scenario(
             initial_gap=gap_to_target,
             stint_laps=stint_laps_remaining,
             your_compound=your_comp,
             your_start_wear=your_tire_laps,
-            target_compound=target_comp,
-            target_start_wear=target_tire_laps,
+            other_compound=target_comp,
+            other_start_wear=target_tire_laps,
             your_modes=[('attack', stint_laps_remaining)],
-            drs_threshold=drs_threshold,
-            config=config
+            config=config,
+            is_defense=False,
+            drs_threshold=drs_threshold
         )
         attack_scenario.name = "ATTACK"
         scenarios.append(attack_scenario)
@@ -1071,8 +1006,8 @@ def analyze_live_strategy(
     compound = config.compounds[current_compound]
     
     # Calculate current tire state
-    wear_percent = (tire_laps / compound.max_competitive_laps) * 100
-    remaining_competitive = calculate_remaining_competitive_laps(compound, tire_laps, config)
+    wear_percent = calculate_wear_percent(tire_laps, compound.max_competitive_laps)
+    remaining_competitive = calculate_remaining_competitive_laps(compound, tire_laps)
     can_finish_no_pit = remaining_competitive >= remaining_laps
     
     # Generate all continuation strategies

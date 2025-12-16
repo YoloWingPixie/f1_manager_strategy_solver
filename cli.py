@@ -16,6 +16,15 @@ from output import (
 )
 
 
+def prompt_compound(compounds: list[str], label: str) -> str:
+    """Prompt user to select a compound from a list. Raises IndexError if invalid."""
+    print(f"\nCompounds: {', '.join(f'{i+1}={c}' for i, c in enumerate(compounds))}")
+    idx = int(input(f"{label} (enter number): ")) - 1
+    if idx < 0 or idx >= len(compounds):
+        raise IndexError("Invalid compound selection")
+    return compounds[idx]
+
+
 def run_race_command(config: RaceConfig) -> None:
     """Run the race strategy generation command."""
     print("--- Race Strategy Optimizer Initializing ---")
@@ -104,7 +113,6 @@ def run_sc_interactive(config: RaceConfig) -> None:
     compounds = list(config.compounds.keys())
     
     try:
-        # Current lap
         current_lap = int(input("\nCurrent lap number: "))
         remaining = config.race_laps - current_lap
         if remaining <= 0:
@@ -112,28 +120,17 @@ def run_sc_interactive(config: RaceConfig) -> None:
             return
         print(f"  -> {remaining} laps remaining")
         
-        # Stint laps
         stint_laps = int(input("Laps on current tires: "))
-        
-        # Compound selection
-        print(f"\nCompounds: {', '.join(f'{i+1}={c}' for i, c in enumerate(compounds))}")
-        comp_idx = int(input("Current compound (enter number): ")) - 1
-        if comp_idx < 0 or comp_idx >= len(compounds):
-            print("Invalid compound selection")
-            return
-        compound = compounds[comp_idx]
-        
-        # Position loss
+        compound = prompt_compound(compounds, "Current compound")
         pos_loss = int(input("Positions lost if you pit (0 if unknown): "))
         
-    except ValueError:
-        print("Invalid input - please enter numbers only")
+    except (ValueError, IndexError) as e:
+        print(f"Invalid input: {e}")
         return
     except KeyboardInterrupt:
         print("\nCancelled")
         return
     
-    # Run analysis
     run_sc_command(config, stint_laps, remaining, compound, pos_loss)
 
 
@@ -181,22 +178,21 @@ def run_undercut_interactive(config: RaceConfig) -> None:
         your_tire_laps = int(input("Laps on your current tires: "))
         rival_tire_laps = int(input("Laps on rival's tires: "))
         
-        print(f"\nCompounds: {', '.join(f'{i+1}={c}' for i, c in enumerate(compounds))}")
-        your_idx = int(input("Your compound (enter number): ")) - 1
-        rival_idx = int(input("Rival compound (enter number): ")) - 1
+        your_compound = prompt_compound(compounds, "Your compound")
+        rival_compound = prompt_compound(compounds, "Rival compound")
         
         pit_to_input = input("Pit to compound (enter number, or press Enter for fastest): ")
         pit_to = compounds[int(pit_to_input) - 1] if pit_to_input.strip() else None
         
-    except (ValueError, IndexError):
-        print("Invalid input")
+    except (ValueError, IndexError) as e:
+        print(f"Invalid input: {e}")
         return
     except KeyboardInterrupt:
         print("\nCancelled")
         return
 
     run_undercut_command(config, gap, current_lap, rival_pit, your_tire_laps,
-                        rival_tire_laps, compounds[your_idx], compounds[rival_idx], pit_to)
+                        rival_tire_laps, your_compound, rival_compound, pit_to)
 
 
 def run_undercut_command(config: RaceConfig, gap: float, current_lap: int, rival_pit: int,
@@ -231,19 +227,18 @@ def run_drs_interactive(config: RaceConfig) -> None:
         your_tire_laps = int(input("Laps on your tires: "))
         attacker_tire_laps = int(input("Laps on attacker's tires: "))
         
-        print(f"\nCompounds: {', '.join(f'{i+1}={c}' for i, c in enumerate(compounds))}")
-        your_idx = int(input("Your compound (enter number): ")) - 1
-        attacker_idx = int(input("Attacker compound (enter number): ")) - 1
+        your_compound = prompt_compound(compounds, "Your compound")
+        attacker_compound = prompt_compound(compounds, "Attacker compound")
         
-    except (ValueError, IndexError):
-        print("Invalid input")
+    except (ValueError, IndexError) as e:
+        print(f"Invalid input: {e}")
         return
     except KeyboardInterrupt:
         print("\nCancelled")
         return
     
     run_drs_command(config, gap, stint_laps, your_tire_laps, attacker_tire_laps,
-                   compounds[your_idx], compounds[attacker_idx])
+                   your_compound, attacker_compound)
 
 
 def run_drs_command(config: RaceConfig, gap: float, stint_laps_remaining: int,
@@ -276,19 +271,18 @@ def run_attack_interactive(config: RaceConfig) -> None:
         your_tire_laps = int(input("Laps on your tires: "))
         target_tire_laps = int(input("Laps on target's tires: "))
         
-        print(f"\nCompounds: {', '.join(f'{i+1}={c}' for i, c in enumerate(compounds))}")
-        your_idx = int(input("Your compound (enter number): ")) - 1
-        target_idx = int(input("Target compound (enter number): ")) - 1
+        your_compound = prompt_compound(compounds, "Your compound")
+        target_compound = prompt_compound(compounds, "Target compound")
         
-    except (ValueError, IndexError):
-        print("Invalid input")
+    except (ValueError, IndexError) as e:
+        print(f"Invalid input: {e}")
         return
     except KeyboardInterrupt:
         print("\nCancelled")
         return
     
     run_attack_command(config, gap, stint_laps, your_tire_laps, target_tire_laps,
-                      compounds[your_idx], compounds[target_idx])
+                      your_compound, target_compound)
 
 
 def run_attack_command(config: RaceConfig, gap: float, stint_laps_remaining: int,
@@ -317,7 +311,6 @@ def run_live_interactive(config: RaceConfig) -> None:
     compounds = list(config.compounds.keys())
     
     try:
-        # Current lap
         current_lap = int(input("\nCurrent lap number: "))
         remaining = config.race_laps - current_lap
         if remaining <= 0:
@@ -325,16 +318,11 @@ def run_live_interactive(config: RaceConfig) -> None:
             return
         print(f"  -> {remaining} laps remaining")
         
-        # Compound
-        print(f"\nCompounds: {', '.join(f'{i+1}={c}' for i, c in enumerate(compounds))}")
-        compound_idx = int(input("Current tire compound (enter number): ")) - 1
-        compound = compounds[compound_idx]
-        
-        # Tire wear
+        compound = prompt_compound(compounds, "Current tire compound")
         tire_laps = int(input("Laps on current tires: "))
         
-    except (ValueError, IndexError):
-        print("Invalid input")
+    except (ValueError, IndexError) as e:
+        print(f"Invalid input: {e}")
         return
     except KeyboardInterrupt:
         print("\nCancelled")

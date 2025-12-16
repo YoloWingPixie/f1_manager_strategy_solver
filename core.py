@@ -1,8 +1,64 @@
 """Core calculations: ERT, degradation model, and tire utilities."""
+from __future__ import annotations
 from math import floor
 from itertools import product
+from typing import TYPE_CHECKING
 
 from models import RaceConfig, Compound, Inventory, PACE_MODES
+
+if TYPE_CHECKING:
+    from models import Strategy
+
+
+# --- Shared Helpers ---
+
+def calculate_wear_percent(tire_laps: int, max_competitive_laps: int) -> float:
+    """Calculate tire wear as a percentage of max competitive life."""
+    return (tire_laps / max_competitive_laps) * 100
+
+
+def best_by_ert(strategies: list[Strategy]) -> Strategy | None:
+    """Return the strategy with lowest ERT, or None if list is empty."""
+    return min(strategies, key=lambda s: s.ert) if strategies else None
+
+
+def count_compound_usage(compounds: list[str]) -> dict[str, int]:
+    """Count how many times each compound appears in a list."""
+    usage: dict[str, int] = {}
+    for compound in compounds:
+        usage[compound] = usage.get(compound, 0) + 1
+    return usage
+
+
+def find_best_two_stint_modes(
+    comp1: Compound,
+    laps1: int,
+    wear1: float,
+    comp2: Compound,
+    laps2: int,
+    wear2: float,
+    pit_loss: float,
+    config: RaceConfig
+) -> tuple[tuple[str, str], float]:
+    """
+    Find the optimal pace mode combination for two stints.
+    
+    Returns (best_modes, best_ert) where best_modes is (mode1, mode2).
+    """
+    best_ert = float('inf')
+    best_modes = ('normal', 'normal')
+    
+    for mode1 in PACE_MODES:
+        for mode2 in PACE_MODES:
+            ert1 = calculate_stint_ert_with_wear(comp1, laps1, wear1, mode1, config)
+            ert2 = calculate_stint_ert_with_wear(comp2, laps2, wear2, mode2, config)
+            total = ert1 + ert2 + pit_loss
+            
+            if total < best_ert:
+                best_ert = total
+                best_modes = (mode1, mode2)
+    
+    return best_modes, best_ert
 
 
 # --- Degradation Model ---
@@ -60,12 +116,12 @@ def get_tire_max_laps(
     Determine max competitive laps for each stint based on tire type (new vs scrubbed).
     New tires are used first, then scrubbed. Scrubbed have reduced life.
     """
-    usage: dict[str, int] = {}
+    running_usage: dict[str, int] = {}
     max_laps_list = []
 
     for compound_name, _ in stints:
-        usage[compound_name] = usage.get(compound_name, 0) + 1
-        times_used = usage[compound_name]
+        running_usage[compound_name] = running_usage.get(compound_name, 0) + 1
+        times_used = running_usage[compound_name]
 
         base_max = config.compounds[compound_name].max_competitive_laps
         new_count = config.inventory.get_new_count(compound_name)
@@ -78,14 +134,9 @@ def get_tire_max_laps(
     return max_laps_list
 
 
-def calculate_remaining_competitive_laps(
-    compound: Compound,
-    effective_wear: float,
-    config: RaceConfig
-) -> int:
+def calculate_remaining_competitive_laps(compound: Compound, effective_wear: float) -> int:
     """Calculate how many more competitive laps the tire can do."""
-    remaining = compound.max_competitive_laps - effective_wear
-    return max(0, floor(remaining))
+    return max(0, floor(compound.max_competitive_laps - effective_wear))
 
 
 def calculate_effective_wear(
@@ -252,9 +303,7 @@ def check_inventory(
     require_two_compounds: bool = True
 ) -> bool:
     """Check if a strategy's tire usage is covered by inventory."""
-    usage: dict[str, int] = {}
-    for compound in strategy_compounds:
-        usage[compound] = usage.get(compound, 0) + 1
+    usage = count_compound_usage(strategy_compounds)
 
     # Check total usage per compound
     if usage.get('Soft', 0) > inventory.get_total('Soft'):

@@ -57,8 +57,10 @@ def load_config(path: str) -> RaceConfig:
         hard_scrubbed=inv_raw.get('hard_scrubbed', 0)
     )
 
-    # Parse pace modes
-    pace_modes: dict[str, PaceMode] = {}
+    # Parse pace modes (always include 'normal' as baseline)
+    pace_modes: dict[str, PaceMode] = {
+        'normal': PaceMode(name='normal', delta_per_lap=0.0, degradation_factor=1.0)
+    }
     for mode_name, mode_data in raw['pace_modes'].items():
         pace_modes[mode_name] = PaceMode(
             name=mode_name,

@@ -1,10 +1,6 @@
 """Domain models for F1 race strategy optimization."""
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    pass  # For forward references if needed
 
 
 # Mode abbreviation constant - used for output formatting
@@ -20,10 +16,6 @@ class PaceMode:
     name: str
     delta_per_lap: float  # Seconds gained/lost per lap
     degradation_factor: float  # Multiplier for tire wear rate
-
-    @property
-    def is_normal(self) -> bool:
-        return self.name == 'normal'
 
 
 @dataclass
@@ -88,9 +80,7 @@ class RaceConfig:
     outlap_penalty: float = 1.5
 
     def get_pace_mode(self, mode_name: str) -> PaceMode:
-        """Get pace mode by name, returns normal mode for 'normal'."""
-        if mode_name == 'normal':
-            return PaceMode(name='normal', delta_per_lap=0.0, degradation_factor=1.0)
+        """Get pace mode by name."""
         return self.pace_modes[mode_name]
     
     def has_attack_mode(self) -> bool:

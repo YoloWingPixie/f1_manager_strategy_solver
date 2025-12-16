@@ -1,6 +1,6 @@
 # --- GENERAL RACE CONFIGURATION ---
-race_laps: 72
-pit_loss_seconds: 21 # Time lost during a green flag pit stop
+race_laps: 57
+pit_loss_seconds: 23 # Time lost during a green flag pit stop
 top_strategies: 10 # Number of top strategies to display
 max_pit_stops: 2 # Maximum number of pit stops to consider
 min_stint_laps: auto # Minimum laps per stint ('auto' = calculated from pit loss & degradation)
@@ -12,31 +12,31 @@ require_two_compounds: true  # F1 regulation: must use at least 2 different comp
 # Lap times can be entered as "M:SS.mmm" or just seconds (e.g., 91.209)
 compounds:
   Soft:
-    avg_lap_time: "1:11.486"
-    degradation_s_per_lap: 0.07
-    max_competitive_laps: 24 # Max recommended stint length
+    avg_lap_time: "1:32.169"
+    degradation_s_per_lap: 0.09
+    max_competitive_laps: 27 # Max recommended stint length
   Medium:
-    avg_lap_time: "1:11.891"
-    degradation_s_per_lap: 0.04
-    max_competitive_laps: 33 # Max recommended stint length
+    avg_lap_time: "1:32.756"
+    degradation_s_per_lap: 0.06
+    max_competitive_laps: 37 # Max recommended stint length
   Hard:
-    avg_lap_time: "1:12.201"
-    degradation_s_per_lap: 0.03
-    max_competitive_laps: 39 # Max recommended stint length
+    avg_lap_time: "1:33.204"
+    degradation_s_per_lap: 0.05
+    max_competitive_laps: 43 # Max recommended stint length
 
 # --- TYRE INVENTORY ---
-scrubbed_life_penalty: 4 # Scrubbed tires have this many fewer competitive laps
+scrubbed_life_penalty: 6 # Scrubbed tires have this many fewer competitive laps
 inventory:
   # The app will track total usage against these counts
   soft_new: 1
   soft_scrubbed: 2
-  medium_new: 1
+  medium_new: 2
   medium_scrubbed: 0
   hard_new: 1
   hard_scrubbed: 0
 
 # --- SAFETY CAR ---
-sc_pit_loss_seconds: 19  # Reduced pit loss under safety car (field bunched)
+sc_pit_loss_seconds: 20  # Reduced pit loss under safety car (field bunched)
 sc_conserve_laps: 3     # Laps under SC before green flag
 sc_conserve_factor: 0.5 # Tire wear rate under SC (0.5 = half normal degradation)
 position_loss_value: 5 # Seconds of ERT penalty per position lost when pitting
