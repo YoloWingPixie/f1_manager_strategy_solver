@@ -68,6 +68,11 @@ def load_config(path: str) -> RaceConfig:
             degradation_factor=mode_data['degradation_factor']
         )
 
+    # Validate degradation model
+    deg_model = raw.get('degradation_model', 'progressive')
+    if deg_model not in ('progressive', 'linear'):
+        raise ValueError(f"Invalid degradation_model: {deg_model}. Must be 'progressive' or 'linear'.")
+
     return RaceConfig(
         race_laps=raw['race_laps'],
         pit_loss_seconds=raw['pit_loss_seconds'],
@@ -81,6 +86,7 @@ def load_config(path: str) -> RaceConfig:
         scrubbed_life_penalty=raw.get('scrubbed_life_penalty', 3),
         require_medium_or_hard=raw.get('require_medium_or_hard', True),
         require_two_compounds=raw.get('require_two_compounds', True),
+        degradation_model=deg_model,
         sc_pit_loss_seconds=raw.get('sc_pit_loss_seconds', 5.0),
         sc_conserve_laps=raw.get('sc_conserve_laps', 3),
         sc_conserve_factor=raw.get('sc_conserve_factor', 0.5),

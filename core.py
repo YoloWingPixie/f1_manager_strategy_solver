@@ -63,45 +63,49 @@ def find_best_two_stint_modes(
 
 # --- Degradation Model ---
 
-def get_degradation_factor(lap: float, max_competitive_laps: int) -> float:
+def get_degradation_factor(lap: float, max_competitive_laps: int, use_linear: bool = False) -> float:
     """
-    Get progressive degradation multiplier for a given lap of tire wear.
+    Get degradation multiplier for a given lap of tire wear.
     
-    Uses a quadratic curve that accelerates toward the "cliff":
+    Linear model: Constant factor of 1.0 (simple degradation_s_per_lap).
+    
+    Progressive model: Quadratic curve that accelerates toward the "cliff":
     - Early laps: ~10% of average degradation (tires in sweet spot)
     - Approaching max life: curves up rapidly to 150% (the cliff)
     - Beyond max life: 2x the cliff rate (300%) - tires are done
-    
-    This models real tire behavior where deg is low early, then falls off a cliff.
     """
+    if use_linear:
+        return 1.0
+    
+    # Progressive model
     if lap <= max_competitive_laps:
-        # Quadratic curve: starts slow, accelerates toward cliff
         ratio = lap / max_competitive_laps
-        # 0.1 at lap 0, curves up to 1.5 at max_competitive_laps
         return 0.1 + 1.4 * (ratio ** 2)
     else:
-        # Beyond the cliff - 2x the cliff rate
-        # At max: factor was 1.5, now it's 3.0 and continues climbing
         over_ratio = (lap - max_competitive_laps) / max_competitive_laps
-        return 3.0 + 2.8 * over_ratio  # 2x the curve rate beyond cliff
+        return 3.0 + 2.8 * over_ratio
 
 
-def calculate_progressive_degradation(
+def calculate_degradation(
     base_deg: float,
     start_lap: float,
     num_laps: int,
-    max_competitive_laps: int
+    max_competitive_laps: int,
+    use_linear: bool = False
 ) -> float:
     """
-    Calculate total degradation time over a stint using progressive model.
+    Calculate total degradation time over a stint.
     
-    Each lap's degradation = base_deg × factor(current_lap)
-    where factor grows from 0.1 (fresh) to 1.5 (at max life).
+    Linear: Each lap's degradation = base_deg (constant).
+    Progressive: Each lap's degradation = base_deg × factor(current_lap).
     """
+    if use_linear:
+        return base_deg * num_laps
+    
     total_deg = 0.0
     for i in range(num_laps):
         current_lap = start_lap + i
-        factor = get_degradation_factor(current_lap, max_competitive_laps)
+        factor = get_degradation_factor(current_lap, max_competitive_laps, use_linear=False)
         total_deg += base_deg * factor
     return total_deg
 
@@ -162,15 +166,17 @@ def calculate_lap_time_at_wear(
     mode: str,
     config: RaceConfig
 ) -> float:
-    """Calculate lap time for a compound at a specific lap of wear."""
+    """Calculate lap time for a compound after lap_number laps of wear (cumulative)."""
     pace_mode = config.get_pace_mode(mode)
     base_deg = compound.degradation_s_per_lap * pace_mode.degradation_factor
+    use_linear = config.degradation_model == 'linear'
     
-    # Get degradation factor for this lap
-    deg_factor = get_degradation_factor(lap_number, compound.max_competitive_laps)
-    lap_degradation = base_deg * deg_factor
+    # Cumulative degradation from lap 0 to lap_number
+    cumulative_deg = calculate_degradation(
+        base_deg, 0, lap_number, compound.max_competitive_laps, use_linear
+    )
     
-    return compound.avg_lap_time_s + lap_degradation + pace_mode.delta_per_lap
+    return compound.avg_lap_time_s + cumulative_deg + pace_mode.delta_per_lap
 
 
 def estimate_tire_delta_per_lap(
@@ -181,18 +187,17 @@ def estimate_tire_delta_per_lap(
 ) -> float:
     """
     Estimate pace difference per lap between worn and fresh tires.
-    Uses progressive degradation model.
     Returns positive value if worn tires are slower.
     """
-    # Base pace difference between compounds
+    use_linear = config.degradation_model == 'linear'
     compound_delta = worn_compound.avg_lap_time_s - fresh_compound.avg_lap_time_s
     
-    # Current degradation level on worn tires (using progressive model)
-    deg_factor = get_degradation_factor(worn_laps, worn_compound.max_competitive_laps)
+    deg_factor = get_degradation_factor(worn_laps, worn_compound.max_competitive_laps, use_linear)
     current_deg = worn_compound.degradation_s_per_lap * deg_factor
     
-    # Fresh tires start at 10% of average degradation
-    fresh_deg = fresh_compound.degradation_s_per_lap * 0.1
+    # Fresh tires: linear uses factor 1.0, progressive uses 0.1
+    fresh_factor = get_degradation_factor(0, fresh_compound.max_competitive_laps, use_linear)
+    fresh_deg = fresh_compound.degradation_s_per_lap * fresh_factor
     
     return compound_delta + (current_deg - fresh_deg)
 
@@ -206,15 +211,12 @@ def calculate_ert(
 ) -> float:
     """
     Calculate Estimated Race Time (ERT) for a strategy with per-stint pace modes.
-    
-    Uses progressive degradation model where tire deg starts at 10% of average
-    and increases to 150% at max competitive tire life.
-    
     Returns float('inf') if strategy is invalid (stint exceeds tire life).
     """
     total_time = 0.0
     num_stops = len(stints) - 1
     max_laps_per_stint = get_tire_max_laps(stints, config)
+    use_linear = config.degradation_model == 'linear'
 
     for i, ((compound_name, N), mode) in enumerate(zip(stints, stint_modes)):
         if N <= 0:
@@ -227,17 +229,13 @@ def calculate_ert(
         adjusted_max_laps = floor(max_laps_base / pace_mode.degradation_factor)
         
         if N > adjusted_max_laps:
-            return float('inf')  # Stint exceeds tire life for this mode
+            return float('inf')
 
-        # Base degradation adjusted for pace mode
         base_deg = compound.degradation_s_per_lap * pace_mode.degradation_factor
-
-        # Progressive degradation: each stint starts fresh (lap 0)
-        degradation_time = calculate_progressive_degradation(
-            base_deg, 0, N, compound.max_competitive_laps
+        degradation_time = calculate_degradation(
+            base_deg, 0, N, compound.max_competitive_laps, use_linear
         )
         
-        # Calculate time: base + degradation + pace adjustment
         stint_time = (N * compound.avg_lap_time_s) + degradation_time + (N * pace_mode.delta_per_lap)
         total_time += stint_time
 
@@ -252,22 +250,15 @@ def calculate_stint_ert_with_wear(
     mode: str,
     config: RaceConfig
 ) -> float:
-    """
-    Calculate ERT for a stint starting with pre-worn tires.
-    Uses progressive degradation model where deg starts low and increases with wear.
-    """
+    """Calculate ERT for a stint starting with pre-worn tires."""
     pace_mode = config.get_pace_mode(mode)
     base_deg = compound.degradation_s_per_lap * pace_mode.degradation_factor
+    use_linear = config.degradation_model == 'linear'
     
-    # Base time
     base_time = laps * compound.avg_lap_time_s
-    
-    # Progressive degradation: starts low, increases toward tire cliff
-    degradation_time = calculate_progressive_degradation(
-        base_deg, starting_wear, laps, compound.max_competitive_laps
+    degradation_time = calculate_degradation(
+        base_deg, starting_wear, laps, compound.max_competitive_laps, use_linear
     )
-    
-    # Pace adjustment
     pace_time = laps * pace_mode.delta_per_lap
     
     return base_time + degradation_time + pace_time

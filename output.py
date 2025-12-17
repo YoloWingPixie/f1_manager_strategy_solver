@@ -229,7 +229,7 @@ def print_tire_domains(analysis: TireDomainAnalysis, config: RaceConfig, show_ch
     print("\n" + "=" * 60)
     print("TIRE DOMAIN ANALYSIS (Fresh Stint)")
     print("=" * 60)
-    print("Based on progressive degradation model\n")
+    print(f"Based on {config.degradation_model} degradation model\n")
     
     # Domain table
     print("COMPOUND DOMAINS:")
@@ -256,9 +256,9 @@ def print_tire_domains(analysis: TireDomainAnalysis, config: RaceConfig, show_ch
     print("-" * 60)
     for name, details in analysis.compound_details.items():
         print(f"{name}:")
-        print(f"  Base pace: {format_laptime(details['base_pace_s'])} | "
-              f"Deg: {details['degradation_s_per_lap']:.2f}s/lap | "
-              f"Cliff: {details['max_competitive_laps']} laps")
+        print(f"  Fresh: {format_laptime(details['base_pace_s'])} | "
+              f"At cliff (lap {details['max_competitive_laps']}): {format_laptime(details['end_pace_s'])} | "
+              f"Deg: {details['degradation_s_per_lap']:.2f}s/lap")
     
     # ASCII chart
     if show_chart:

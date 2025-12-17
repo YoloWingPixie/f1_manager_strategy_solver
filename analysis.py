@@ -14,7 +14,7 @@ from core import (
     get_tire_max_laps, calculate_ert, find_optimal_modes, check_inventory,
     calculate_min_stint, calculate_effective_wear, calculate_remaining_competitive_laps,
     calculate_stint_ert_with_wear, calculate_lap_time_at_wear, estimate_tire_delta_per_lap,
-    get_degradation_factor, calculate_wear_percent, best_by_ert, find_best_two_stint_modes
+    calculate_wear_percent, best_by_ert, find_best_two_stint_modes
 )
 
 
@@ -431,24 +431,31 @@ def analyze_tire_domains(
     """
     Analyze which tire compound is fastest at each lap of a stint.
     Identifies crossover points where one compound becomes faster than another.
+    Only considers compounds within their competitive lap range.
     """
     compounds = list(config.compounds.values())
     
     # Find the maximum analysis lap (longest tire life)
     max_lap = max(c.max_competitive_laps for c in compounds)
     
-    # Calculate lap time for each compound at each lap
-    lap_times: dict[str, list[float]] = {}
+    # Calculate lap time for each compound at each lap (only within competitive range)
+    lap_times: dict[str, list[float | None]] = {}
     for compound in compounds:
         lap_times[compound.name] = []
         for lap in range(starting_wear, max_lap + 1):
-            lap_time = calculate_lap_time_at_wear(compound, lap, mode, config)
-            lap_times[compound.name].append(lap_time)
+            if lap <= compound.max_competitive_laps:
+                lap_time = calculate_lap_time_at_wear(compound, lap, mode, config)
+                lap_times[compound.name].append(lap_time)
+            else:
+                lap_times[compound.name].append(None)  # Beyond cliff
     
-    # Find fastest compound at each lap
+    # Find fastest compound at each lap (only among compounds still competitive)
     fastest_at_lap: list[str] = []
-    for lap_idx in range(len(lap_times[compounds[0].name])):
-        fastest = min(compounds, key=lambda c: lap_times[c.name][lap_idx])
+    for lap_idx in range(max_lap - starting_wear + 1):
+        valid_compounds = [c for c in compounds if lap_times[c.name][lap_idx] is not None]
+        if not valid_compounds:
+            break  # No compounds left competitive
+        fastest = min(valid_compounds, key=lambda c: lap_times[c.name][lap_idx])
         fastest_at_lap.append(fastest.name)
     
     # Build domains (ranges where a compound is fastest)
@@ -464,19 +471,24 @@ def analyze_tire_domains(
         if fastest != current_compound:
             # End current domain
             prev_lap = actual_lap - 1
+            prev_lap_idx = prev_lap - starting_wear
             domains.append(TireDomain(
                 compound=current_compound,
                 start_lap=domain_start,
                 end_lap=prev_lap,
                 start_laptime_s=lap_times[current_compound][domain_start - starting_wear],
-                end_laptime_s=lap_times[current_compound][prev_lap - starting_wear]
+                end_laptime_s=lap_times[current_compound][prev_lap_idx]
             ))
             
-            # Record crossover
+            # Record crossover (use previous lap time if current is None - cliff reached)
+            from_laptime = lap_times[current_compound][lap_idx]
+            if from_laptime is None:
+                from_laptime = lap_times[current_compound][prev_lap_idx]
+            
             crossover_points.append(CrossoverPoint(
                 lap=actual_lap,
                 from_compound=current_compound,
-                from_laptime_s=lap_times[current_compound][lap_idx],
+                from_laptime_s=from_laptime,
                 to_compound=fastest,
                 to_laptime_s=lap_times[fastest][lap_idx]
             ))
@@ -494,13 +506,15 @@ def analyze_tire_domains(
         end_laptime_s=lap_times[current_compound][final_lap - starting_wear]
     ))
     
-    # Build compound details
+    # Build compound details (with lap time at end of competitive range)
     compound_details = {}
     for compound in compounds:
+        end_lap_time = calculate_lap_time_at_wear(compound, compound.max_competitive_laps, mode, config)
         compound_details[compound.name] = {
             'base_pace_s': compound.avg_lap_time_s,
             'degradation_s_per_lap': compound.degradation_s_per_lap,
-            'max_competitive_laps': compound.max_competitive_laps
+            'max_competitive_laps': compound.max_competitive_laps,
+            'end_pace_s': end_lap_time
         }
     
     return TireDomainAnalysis(
